@@ -27,11 +27,11 @@ fn draw_oscilloscope(
     // Scale the audio samples to fit the visualization window
     let scaled_ys: Vec<i32> = ys
     .iter()
-    .map(|&sample| sample.wrapping_mul(WINDOW_HEIGHT).wrapping_div(i32::MAX / 4)+7)
+    .map(|&sample| sample.wrapping_mul(WINDOW_HEIGHT).wrapping_div(i32::MAX / 8)+7)
     .collect();
 
-    let xs: Vec<i32> = (0..WINDOW_WIDTH * 4).collect();
-    let ys: Vec<i32> = scaled_ys;
+    let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
+    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 67108864)+7).collect();
 
     let mut last_y = 0;
 
@@ -91,7 +91,6 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
 
     // Dummy loop to keep the audio stream running
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }
 
@@ -122,7 +121,7 @@ fn main() -> Result<(), anyhow::Error> {
     let _ys_for_stream = ys.clone();
 
     // Run the input stream on a separate thread.
-    let audio_thread = std::thread::spawn(move || audio_stream_loop(tx));
+    let _audio_thread = std::thread::spawn(move || audio_stream_loop(tx));
     //std::thread::spawn(move || audio_stream_loop(ys_for_stream));
 
     'running: loop {
@@ -152,7 +151,8 @@ fn main() -> Result<(), anyhow::Error> {
     }
 
     // Stop the audio streaming loop gracefully
-    audio_thread.join().unwrap();
+    //audio_thread.join().unwrap();
+    //gracefully my ass ChatGPT, this shit hung the entire thing on closing
     Ok(())
 }
 
