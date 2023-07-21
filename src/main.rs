@@ -6,10 +6,11 @@ extern crate sdl2;
 use sdl2::event::Event;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use std::f64::consts::PI;
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use anyhow;
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use std::thread;
 
 mod viscolors;
 
@@ -23,25 +24,14 @@ fn draw_oscilloscope(
     osc_colors: &[Color],
     ys: &[i32],
 ) {
+    // Scale the audio samples to fit the visualization window
+    let scaled_ys: Vec<i32> = ys
+    .iter()
+    .map(|&sample| sample.wrapping_mul(WINDOW_HEIGHT).wrapping_div(i32::MAX / 4)+7)
+    .collect();
 
-    // Find the maximum absolute value of the audio samples for scaling
-    let max_sample = ys
-        .iter()
-        .map(|&sample| sample.abs())
-        .max()
-        .unwrap_or(1); // Avoid division by zero
-
-    let _ys_data: Vec<i32> = ys
-        .iter()
-        .map(|&sample| {
-            let scaled_sample = (sample as f32 * WINDOW_HEIGHT as f32 / 2.0 / max_sample as f32)
-                as i32;
-            scaled_sample + (WINDOW_HEIGHT-7)
-        })
-        .collect();
-    println!("{_ys_data:?}");
     let xs: Vec<i32> = (0..WINDOW_WIDTH * 4).collect();
-    let ys: Vec<i32> = _ys_data;
+    let ys: Vec<i32> = scaled_ys;
 
     let mut last_y = 0;
 
@@ -75,6 +65,36 @@ fn draw_oscilloscope(
     }
 }
 
+fn audio_stream_loop(tx: Sender<Vec<i32>>) {
+    let host = cpal::default_host();
+    let device = host.default_input_device().expect("failed to find input device");
+    let config = device.default_input_config().expect("Failed to get default input config");
+
+    let err_fn = move |err| {
+        eprintln!("an error occurred on stream: {}", err);
+    };
+
+    let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        //let mut ys = ys_callback.lock().unwrap();
+        let left_channel_samples: Vec<i32> = data
+            .iter()
+            .step_by(2) // Skip every other sample (right channel)
+            .map(|&sample| (sample * i32::MAX as f32) as i32)
+            .collect();
+        //ys.extend_from_slice(&left_channel_samples);
+        // Send audio samples through the channel
+        tx.send(left_channel_samples).unwrap();
+    };
+
+    let stream = device.build_input_stream(&config.into(), callback, err_fn, None).unwrap();
+    stream.play().unwrap();
+
+    // Dummy loop to keep the audio stream running
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+}
+
 fn main() -> Result<(), anyhow::Error> {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -94,41 +114,16 @@ fn main() -> Result<(), anyhow::Error> {
     canvas.present();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
+    let (tx, rx): (Sender<Vec<i32>>, Receiver<Vec<i32>>) = unbounded();
 
     // The vector to store captured audio samples.
     let ys = Arc::new(Mutex::new(Vec::<i32>::new()));
 
-    // Create a reference to ys for the callback function to store captured samples.
-    let ys_callback = ys.clone();
+    let _ys_for_stream = ys.clone();
 
     // Run the input stream on a separate thread.
-    std::thread::spawn(move || {
-        let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .expect("failed to find input device");
-        let config = device
-            .default_input_config()
-            .expect("Failed to get default input config");
-
-        let err_fn = move |err| {
-            eprintln!("an error occurred on stream: {}", err);
-        };
-
-        let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            let mut ys = ys_callback.lock().unwrap();
-            let ys_i32: Vec<i32> = data.iter().map(|&sample| (sample * i32::MAX as f32) as i32).collect();
-            ys.extend_from_slice(&ys_i32);            
-            //println!("{data:?}");
-        };
-
-        let stream = device.build_input_stream(&config.into(), callback, err_fn, None).unwrap();
-        stream.play().unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        //stream.pause().unwrap();
-        //stream.into_inner();
-        //println!("Recording complete!");
-    });
+    let audio_thread = std::thread::spawn(move || audio_stream_loop(tx));
+    //std::thread::spawn(move || audio_stream_loop(ys_for_stream));
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -141,16 +136,23 @@ fn main() -> Result<(), anyhow::Error> {
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
 
-        let ys = ys.lock().unwrap();
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &ys);        
-        //println!("{ys:?}");
+        // Receive audio data from the channel
+        let ys = rx.try_recv().unwrap_or_default();
+
+        // Print the first few audio samples received (optional).
+/*         if !ys.is_empty() {
+            println!("First few audio samples: {:?}", &ys[..std::cmp::min(10, ys.len())]);
+        } */
+
+        // Draw the visualization using the latest available data.
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &ys);
 
         canvas.present();
-
-
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
 
+    // Stop the audio streaming loop gracefully
+    audio_thread.join().unwrap();
     Ok(())
 }
 
