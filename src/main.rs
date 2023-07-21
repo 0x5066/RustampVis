@@ -24,14 +24,9 @@ fn draw_oscilloscope(
     osc_colors: &[Color],
     ys: &[i32],
 ) {
-    // Scale the audio samples to fit the visualization window
-    let scaled_ys: Vec<i32> = ys
-    .iter()
-    .map(|&sample| sample.wrapping_mul(WINDOW_HEIGHT).wrapping_div(i32::MAX / 8)+7)
-    .collect();
 
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
-    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 67108864)+7).collect();
+    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 512)+7).collect();
 
     let mut last_y = 0;
 
@@ -74,12 +69,13 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
         eprintln!("an error occurred on stream: {}", err);
     };
 
-    let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+    let callback = move |data: &[i16], _: &cpal::InputCallbackInfo| {
         //let mut ys = ys_callback.lock().unwrap();
         let left_channel_samples: Vec<i32> = data
             .iter()
-            .step_by(2) // Skip every other sample (right channel)
-            .map(|&sample| (sample * i32::MAX as f32) as i32)
+            .step_by(16) // Skip every other sample (right channel)
+            //this is temporary, i need an actual buffer size
+            .map(|&sample| (sample * i32::MAX as i16) as i32)
             .collect();
         //ys.extend_from_slice(&left_channel_samples);
         // Send audio samples through the channel
@@ -108,9 +104,6 @@ fn main() -> Result<(), anyhow::Error> {
     let osc_colors = osc_colors_and_peak(&viscolors);
 
     let mut canvas = window.into_canvas().build().unwrap();
-    canvas.set_draw_color(Color::RGB(0, 0, 0));
-    canvas.clear();
-    canvas.present();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
     let (tx, rx): (Sender<Vec<i32>>, Receiver<Vec<i32>>) = unbounded();
@@ -123,6 +116,7 @@ fn main() -> Result<(), anyhow::Error> {
     // Run the input stream on a separate thread.
     let _audio_thread = std::thread::spawn(move || audio_stream_loop(tx));
     //std::thread::spawn(move || audio_stream_loop(ys_for_stream));
+    
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -131,10 +125,8 @@ fn main() -> Result<(), anyhow::Error> {
                 _ => {}
             }
         }
-
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
-
         // Receive audio data from the channel
         let ys = rx.try_recv().unwrap_or_default();
 
