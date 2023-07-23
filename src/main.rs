@@ -30,6 +30,19 @@ fn draw_oscilloscope(
 
     let mut last_y = 0;
 
+    for x in 0..WINDOW_WIDTH{
+        for y in 0..WINDOW_HEIGHT{
+            if x % 2 == 1 || y % 2 == 0{
+                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                canvas.set_draw_color(_colors[0]);
+                canvas.fill_rect(rect).unwrap();
+            } else {
+                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                canvas.set_draw_color(_colors[1]);
+                canvas.fill_rect(rect).unwrap();
+                }
+            }
+        }
     for (x, y) in xs.iter().zip(ys.iter()) {
         let x = *x;
         let y = *y;
@@ -74,7 +87,7 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
             .iter()
             .step_by(12) // Skip every other sample (right channel)
             //this is temporary, i need an actual buffer size
-            .map(|&sample| (sample * i32::MAX as i16) as i32)
+            .map(|&sample| (sample) as i32)
             .collect();
         // Send audio samples through the channel
         tx.send(left_channel_samples).unwrap();
