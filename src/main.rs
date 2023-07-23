@@ -16,7 +16,7 @@ mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
-const ZOOM: i32 = 5;
+const ZOOM: i32 = 7;
 
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
@@ -26,7 +26,7 @@ fn draw_oscilloscope(
 ) {
 
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
-    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 512)+7).collect();
+    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 2048)+7).collect(); //matches winamp/wacup loudness
 
     let mut last_y = 0;
 
@@ -70,14 +70,12 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
     };
 
     let callback = move |data: &[i16], _: &cpal::InputCallbackInfo| {
-        //let mut ys = ys_callback.lock().unwrap();
         let left_channel_samples: Vec<i32> = data
             .iter()
-            .step_by(16) // Skip every other sample (right channel)
+            .step_by(12) // Skip every other sample (right channel)
             //this is temporary, i need an actual buffer size
             .map(|&sample| (sample * i32::MAX as i16) as i32)
             .collect();
-        //ys.extend_from_slice(&left_channel_samples);
         // Send audio samples through the channel
         tx.send(left_channel_samples).unwrap();
     };
@@ -85,7 +83,7 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
     let stream = device.build_input_stream(&config.into(), callback, err_fn, None).unwrap();
     stream.play().unwrap();
 
-    // Dummy loop to keep the audio stream running
+    // The audio stream loop should not block, so we use an empty loop.
     loop {
     }
 }
@@ -106,17 +104,15 @@ fn main() -> Result<(), anyhow::Error> {
     let mut canvas = window.into_canvas().build().unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
-    let (tx, rx): (Sender<Vec<i32>>, Receiver<Vec<i32>>) = unbounded();
 
     // The vector to store captured audio samples.
-    let ys = Arc::new(Mutex::new(Vec::<i32>::new()));
+    let audio_data = Arc::new(Mutex::new(Vec::<i32>::new()));
 
-    let _ys_for_stream = ys.clone();
+    // Create a blocking receiver to get audio samples from the audio stream loop.
+    let (tx, rx): (Sender<Vec<i32>>, Receiver<Vec<i32>>) = unbounded();
 
-    // Run the input stream on a separate thread.
-    let _audio_thread = std::thread::spawn(move || audio_stream_loop(tx));
-    //std::thread::spawn(move || audio_stream_loop(ys_for_stream));
-    
+    // Start the audio stream loop in a separate thread.
+    thread::spawn(move || audio_stream_loop(tx));
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -125,21 +121,23 @@ fn main() -> Result<(), anyhow::Error> {
                 _ => {}
             }
         }
+
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
-        // Receive audio data from the channel
-        let ys = rx.try_recv().unwrap_or_default();
+        // Lock the mutex and swap the captured audio samples with the visualization data.
+        let audio_samples = rx.recv().unwrap();
+        //println!("Captured audio samples: {:?}", audio_samples);
 
-        // Print the first few audio samples received (optional).
-/*         if !ys.is_empty() {
-            println!("First few audio samples: {:?}", &ys[..std::cmp::min(10, ys.len())]);
-        } */
+        // Lock the mutex and update the captured audio samples.
+        let mut audio_data = audio_data.lock().unwrap();
+        *audio_data = audio_samples;
+        //println!("Captured audio samples: {:?}", audio_data);
 
-        // Draw the visualization using the latest available data.
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &ys);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data);
 
         canvas.present();
-        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        std::thread::sleep(std::time::Duration::from_millis(0));
     }
 
     // Stop the audio streaming loop gracefully
