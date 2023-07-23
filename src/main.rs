@@ -48,7 +48,7 @@ fn draw_oscilloscope(
         let y = *y;
 
         let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
-        let y = std::cmp::min(std::cmp::max(y, 0), WINDOW_HEIGHT - 1);
+        let y = std::cmp::min(std::cmp::max(-y+14, 0), WINDOW_HEIGHT - 1);
 
         if x == 0 {
             last_y = y;
