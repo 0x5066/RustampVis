@@ -26,7 +26,7 @@ fn draw_oscilloscope(
 ) {
 
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
-    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 2048)+7).collect(); //matches winamp/wacup loudness
+    let ys: Vec<i32> = ys.iter().map(|&sample| (sample / 8)-9).collect(); //matches winamp/wacup loudness
 
     let mut last_y = 0;
 
@@ -82,7 +82,7 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
         eprintln!("an error occurred on stream: {}", err);
     };
 
-    let callback = move |data: &[i16], _: &cpal::InputCallbackInfo| {
+    let callback = move |data: &[u8], _: &cpal::InputCallbackInfo| {
         let left_channel_samples: Vec<i32> = data
             .iter()
             .step_by(12) // Skip every other sample (right channel)
@@ -98,6 +98,7 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
 
     // The audio stream loop should not block, so we use an empty loop.
     loop {
+        std::thread::sleep(std::time::Duration::from_millis(32768));
     }
 }
 
@@ -106,7 +107,7 @@ fn main() -> Result<(), anyhow::Error> {
     let video_subsystem = sdl_context.video().unwrap();
 
     let window = video_subsystem
-        .window("rust-sdl2 demo", 600, 128)
+        .window("rust-sdl2 demo", (WINDOW_WIDTH * ZOOM) as u32, (WINDOW_HEIGHT * ZOOM) as u32)
         .position_centered()
         .build()
         .unwrap();
