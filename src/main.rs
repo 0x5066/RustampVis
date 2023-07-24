@@ -76,7 +76,8 @@ fn draw_oscilloscope(
 fn audio_stream_loop(tx: Sender<Vec<i32>>) {
     let host = cpal::default_host();
     let device = host.default_input_device().expect("failed to find input device");
-    let config = device.default_input_config().expect("Failed to get default input config");
+    //let config = device.default_input_config().expect("Failed to get default input config");
+    let streamc = cpal::StreamConfig{channels: 2, sample_rate: cpal::SampleRate(44100), buffer_size: cpal::BufferSize::Fixed(2048)};
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
@@ -93,7 +94,7 @@ fn audio_stream_loop(tx: Sender<Vec<i32>>) {
         tx.send(left_channel_samples).unwrap();
     };
 
-    let stream = device.build_input_stream(&config.into(), callback, err_fn, None).unwrap();
+    let stream = device.build_input_stream(&streamc.into(), callback, err_fn, None).unwrap();
     stream.play().unwrap();
 
     // The audio stream loop should not block, so we use an empty loop.
