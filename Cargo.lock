@@ -3,6 +3,16 @@
 version = 3
 
 [[package]]
+name = "RustampVis"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "crossbeam-channel",
+ "sdl2",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -805,16 +815,6 @@ checksum = "9b85cbef8c220a6abc02aefd892dfc0fc23afb1c6a426316ec33253a3877249b"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "winampvis"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "crossbeam-channel",
- "sdl2",
 ]
 
 [[package]]
