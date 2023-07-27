@@ -11,6 +11,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use anyhow;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::thread;
+//use std::env;
+use clap::Parser;
+use std::collections::VecDeque;
 
 mod viscolors;
 
@@ -18,11 +21,24 @@ const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
 const ZOOM: i32 = 7;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Oscilloscope style
+    #[arg(short, long, default_value = "lines")]
+    oscstyle: String, // Change this to String
+
+    /// Name of the custom viscolor.txt file
+    #[arg(short, long, default_value = "viscolor.txt")]
+    viscolor: String,
+}
+
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     osc_colors: &[Color],
     ys: &[u8],
+    oscstyle: &str,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().map(|&sample| (sample as i32 / 8) - 9).collect(); // cast to i32
@@ -57,29 +73,74 @@ fn draw_oscilloscope(
         let mut bottom = last_y;
         last_y = y;
 
-        if bottom < top {
-            std::mem::swap(&mut bottom, &mut top);
-            top += 1;
-        }
+        if oscstyle == "lines" {
+            if bottom < top {
+                std::mem::swap(&mut bottom, &mut top);
+                top += 1;
+            }
+    
+            for dy in top..=bottom {
+                let color_index = (top as usize) % osc_colors.len();
+                let scope_color = osc_colors[color_index];
+                let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                canvas.set_draw_color(scope_color);
+                canvas.fill_rect(rect).unwrap();
+            }
+        } else if oscstyle == "solid" {
+            if y >= 8{
+                top = 8;
+                bottom = y;
+            } else {
+                top = y;
+                bottom = 7;
+            }
 
-        for dy in top..=bottom {
-            let color_index = (top as usize) % osc_colors.len();
-            let scope_color = osc_colors[color_index];
-            let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
-            canvas.set_draw_color(scope_color);
-            canvas.fill_rect(rect).unwrap();
+            for dy in top..=bottom {
+                let color_index = (y as usize) % osc_colors.len();
+                let scope_color = osc_colors[color_index];
+                let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                canvas.set_draw_color(scope_color);
+                canvas.fill_rect(rect).unwrap();
+            }
+        } else if oscstyle == "dots" {
+            for _dy in -1..y {
+                let color_index = (y as usize) % osc_colors.len();
+                let scope_color = osc_colors[color_index];
+                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                canvas.set_draw_color(scope_color);
+                canvas.fill_rect(rect).unwrap();
+            }
+        } else {
+            eprintln!("Invalid oscilloscope style. Supported styles: lines, solid, dots.");
+            // You can handle this error case according to your needs
+            // ...
         }
     }
 }
 
 fn audio_stream_loop(tx: Sender<Vec<u8>>) {
+    enum ConfigType {
+        Windows(cpal::SupportedStreamConfig),
+        Unix(cpal::StreamConfig),
+    }
     let host = cpal::default_host();
     let device = host.default_input_device().expect("failed to find input device");
-    let streamc = cpal::StreamConfig {
-        channels: 2,
-        sample_rate: cpal::SampleRate(44100),
-        buffer_size: cpal::BufferSize::Fixed(2048),
-    };
+    let config: ConfigType; // Declare the config variable here
+
+    if cfg!(windows) {
+        config = ConfigType::Windows(device.default_input_config().expect("Failed to get default input config"));
+    } else if cfg!(unix) {
+        config = ConfigType::Unix(cpal::StreamConfig {
+            channels: 2,
+            sample_rate: cpal::SampleRate(44100),
+            buffer_size: cpal::BufferSize::Fixed(2048), //not 1152 or 576 but eh, visually it looks *close* enough.
+        });
+    } else {
+        panic!("Unsupported platform");
+    }
+
+    // Create a ring buffer (VecDeque) with a maximum capacity of 576 samples
+    let mut ring_buffer: VecDeque<u8> = VecDeque::with_capacity(75); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
@@ -93,11 +154,24 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>) {
             .map(|&sample| ((-sample + 1.03) * 127.5) as u8)
             .collect();
 
-        // Send audio samples through the channel
-        tx.send(left_channel_samples).unwrap();
+        // Extend the ring buffer with the new samples
+        for sample in &left_channel_samples {
+            if ring_buffer.len() == ring_buffer.capacity() {
+                ring_buffer.pop_front(); // Remove the oldest sample when the buffer is full
+            }
+            ring_buffer.push_back(*sample);
+        }
+
+        // Convert the ring buffer to a regular Vec<u8> and send it through the channel
+        tx.send(ring_buffer.iter().copied().collect()).unwrap();
     };
 
-    let stream = device.build_input_stream(&streamc.into(), callback, err_fn, None).unwrap();
+    // When creating the stream, pattern match on the ConfigType to get the appropriate config
+    let stream = match config {
+        ConfigType::Windows(conf) => device.build_input_stream(&conf.into(), callback, err_fn, None),
+        ConfigType::Unix(conf) => device.build_input_stream(&conf.into(), callback, err_fn, None),
+    }
+    .unwrap();
     stream.play().unwrap();
 
     // The audio stream loop should not block, so we use an empty loop.
@@ -110,14 +184,20 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>) {
 fn main() -> Result<(), anyhow::Error> {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
+    //let args: Vec<String> = env::args().collect();
 
+    let args = Args::parse();
+
+    // Extract the oscstyle field from Args struct
+    let oscstyle = args.oscstyle.as_str(); // Convert String to &str
     let window = video_subsystem
         .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * ZOOM) as u32, (WINDOW_HEIGHT * ZOOM) as u32)
         .position_centered()
         .build()
         .unwrap();
 
-    let viscolors = viscolors::load_colors("viscolor.txt");
+    // Load the custom viscolor.txt file
+    let viscolors = viscolors::load_colors(&args.viscolor);
     let osc_colors = osc_colors_and_peak(&viscolors);
 
     let mut canvas = window.into_canvas().build().unwrap();
@@ -152,7 +232,7 @@ fn main() -> Result<(), anyhow::Error> {
         *audio_data = audio_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle/* , modern*/);
 
         canvas.present();
 
