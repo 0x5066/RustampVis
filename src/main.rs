@@ -31,6 +31,10 @@ struct Args {
     /// Name of the custom viscolor.txt file
     #[arg(short, long, default_value = "viscolor.txt")]
     viscolor: String,
+    
+    /// Index of the input device to use
+    #[arg(short, long)]
+    device: Option<usize>,
 }
 
 fn draw_oscilloscope(
@@ -118,13 +122,20 @@ fn draw_oscilloscope(
     }
 }
 
-fn audio_stream_loop(tx: Sender<Vec<u8>>) {
+fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) {
     enum ConfigType {
         Windows(cpal::SupportedStreamConfig),
         Unix(cpal::StreamConfig),
     }
     let host = cpal::default_host();
-    let device = host.default_input_device().expect("failed to find input device");
+    let device = match selected_device_index {
+        Some(index) => host
+            .input_devices()
+            .expect("Failed to retrieve input devices.")
+            .nth(index)
+            .expect("Invalid device index."),
+        None => todo!(), // i dont plan to change this so consider this a stub
+    };
     let config: ConfigType; // Declare the config variable here
 
     if cfg!(windows) {
@@ -139,7 +150,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>) {
         panic!("Unsupported platform");
     }
 
-    // Create a ring buffer (VecDeque) with a maximum capacity of 576 samples
+    // ring buffer (VecDeque)
     let mut ring_buffer: VecDeque<u8> = VecDeque::with_capacity(75); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
 
     let err_fn = move |err| {
@@ -187,6 +198,12 @@ fn main() -> Result<(), anyhow::Error> {
     //let args: Vec<String> = env::args().collect();
 
     let args = Args::parse();
+        // Check if the --device argument is provided
+        if args.device.is_none() {
+            // If device is not specified, just print the available audio devices and exit.
+            enumerate_audio_devices();
+            return Ok(());
+        }
 
     // Extract the oscstyle field from Args struct
     let oscstyle = args.oscstyle.as_str(); // Convert String to &str
@@ -200,6 +217,8 @@ fn main() -> Result<(), anyhow::Error> {
     let viscolors = viscolors::load_colors(&args.viscolor);
     let osc_colors = osc_colors_and_peak(&viscolors);
 
+    let selected_device_index = args.device;
+
     let mut canvas = window.into_canvas().build().unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -211,7 +230,7 @@ fn main() -> Result<(), anyhow::Error> {
     let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx));
+    thread::spawn(move || audio_stream_loop(tx, selected_device_index));
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -244,6 +263,40 @@ fn main() -> Result<(), anyhow::Error> {
     //gracefully my ass ChatGPT, this shit hung the entire thing on closing
     Ok(())
 }
+
+fn enumerate_audio_devices() {
+    // Print supported and available hosts
+    //println!("Supported hosts:\n  {:?}", cpal::ALL_HOSTS);
+    let available_hosts = cpal::available_hosts();
+    println!("Available hosts:\n  {:?}", available_hosts);
+
+    for host_id in available_hosts {
+        println!("{}", host_id.name());
+        let host = cpal::host_from_id(host_id).expect("Error creating host");
+
+/*         let default_in = host.default_input_device().map(|e| e.name().unwrap());
+        println!("  Default Input Device:\n    {:?}", default_in); */
+
+        let devices = host.devices().expect("Error getting devices");
+        //println!("  Devices: ");
+        for (device_index, device) in devices.enumerate() {
+            println!("  {}. \"{}\"", device_index + 1, device.name().expect("Error getting device name"));
+
+            // Input configs
+/*             if let Ok(conf) = device.default_input_config() {
+                println!("    Default input stream config:\n      {:?}", conf);
+            }
+            let _input_configs = match device.supported_input_configs() {
+                Ok(f) => f.collect(),
+                Err(e) => {
+                    println!("    Error getting supported input configs: {:?}", e);
+                    Vec::new()
+                }
+            }; */
+        }
+    }
+}
+
 
 fn osc_colors_and_peak(colors: &[Color]) -> Vec<Color> {
     if colors.len() == 35 {
