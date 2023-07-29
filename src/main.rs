@@ -7,6 +7,7 @@ use sdl2::event::Event;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use std::sync::{Arc, Mutex};
+use sdl2::keyboard::Keycode;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use anyhow;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -214,8 +215,8 @@ fn main() -> Result<(), anyhow::Error> {
         .unwrap();
 
     // Load the custom viscolor.txt file
-    let viscolors = viscolors::load_colors(&args.viscolor);
-    let osc_colors = osc_colors_and_peak(&viscolors);
+    let mut viscolors = viscolors::load_colors(&args.viscolor);
+    let mut osc_colors = osc_colors_and_peak(&viscolors);
 
     let selected_device_index = match args.device {
         Some(index) => {
@@ -248,6 +249,13 @@ fn main() -> Result<(), anyhow::Error> {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. } => break 'running,
+                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                    // Reload the viscolors data when "R" key is pressed
+                    let new_viscolors = viscolors::load_colors(&args.viscolor);
+                    let new_osc_colors = osc_colors_and_peak(&new_viscolors);
+                    viscolors = new_viscolors;
+                    osc_colors = new_osc_colors;
+                }
                 _ => {}
             }
         }
