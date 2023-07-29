@@ -130,8 +130,8 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
     let host = cpal::default_host();
     let device = match selected_device_index {
         Some(index) => host
-            .input_devices()
-            .expect("Failed to retrieve input devices.")
+            .devices()
+            .expect("Failed to retrieve output devices.")
             .nth(index)
             .expect("Invalid device index."),
         None => todo!(), // i dont plan to change this so consider this a stub
@@ -139,7 +139,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
     let config: ConfigType; // Declare the config variable here
 
     if cfg!(windows) {
-        config = ConfigType::Windows(device.default_input_config().expect("Failed to get default input config"));
+        config = ConfigType::Windows(device.default_output_config().expect("Failed to get default output config"));
     } else if cfg!(unix) {
         config = ConfigType::Unix(cpal::StreamConfig {
             channels: 2,
@@ -217,7 +217,19 @@ fn main() -> Result<(), anyhow::Error> {
     let viscolors = viscolors::load_colors(&args.viscolor);
     let osc_colors = osc_colors_and_peak(&viscolors);
 
-    let selected_device_index = args.device;
+    let selected_device_index = match args.device {
+        Some(index) => {
+            if index == 0 {
+                eprintln!("Device index should start from 1.");
+                std::process::exit(1);
+            }
+            index - 1 // Subtract 1 to make it 0-based
+        }
+        None => {
+            enumerate_audio_devices();
+            std::process::exit(0);
+        }
+    };
 
     let mut canvas = window.into_canvas().build().unwrap();
 
@@ -230,7 +242,7 @@ fn main() -> Result<(), anyhow::Error> {
     let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx, selected_device_index));
+    thread::spawn(move || audio_stream_loop(tx, Some(selected_device_index)));
 
     'running: loop {
         for event in event_pump.poll_iter() {
