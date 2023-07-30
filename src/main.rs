@@ -54,6 +54,7 @@ fn draw_oscilloscope(
     osc_colors: &[Color],
     ys: &[u8],
     oscstyle: &str,
+    vis: u8,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().map(|&sample| (sample as i32 / 8) - 9).collect(); // cast to i32
@@ -73,63 +74,94 @@ fn draw_oscilloscope(
             }
         }
     }
-    for (x, y) in xs.iter().zip(ys.iter()) {
-        let x = *x;
-        let y = *y;
-
-        let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
-        let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
-
-        if x == 0 {
-            last_y = y;
-        }
-
-        let mut top = y;
-        let mut bottom = last_y;
-        last_y = y;
-
-        if oscstyle == "lines" {
-            if bottom < top {
-                std::mem::swap(&mut bottom, &mut top);
-                top += 1;
+    if vis == 1{
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let x = *x;
+            let y = *y;
+    
+            let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
+            let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
+    
+            if x == 0 {
+                last_y = y;
             }
     
-            for dy in top..=bottom {
-                let color_index = (top as usize) % osc_colors.len();
-                let scope_color = osc_colors[color_index];
-                let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
-                canvas.set_draw_color(scope_color);
-                canvas.fill_rect(rect).unwrap();
+            let mut top = y;
+            let mut bottom = last_y;
+            last_y = y;
+    
+            if oscstyle == "lines" {
+                if bottom < top {
+                    std::mem::swap(&mut bottom, &mut top);
+                    top += 1;
+                }
+        
+                for dy in top..=bottom {
+                    let color_index = (top as usize) % osc_colors.len();
+                    let scope_color = osc_colors[color_index];
+                    let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                    canvas.set_draw_color(scope_color);
+                    canvas.fill_rect(rect).unwrap();
+                }
+            } else if oscstyle == "solid" {
+                if y >= 8{
+                    top = 8;
+                    bottom = y;
+                } else {
+                    top = y;
+                    bottom = 7;
+                }
+    
+                for dy in top..=bottom {
+                    let color_index = (y as usize) % osc_colors.len();
+                    let scope_color = osc_colors[color_index];
+                    let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                    canvas.set_draw_color(scope_color);
+                    canvas.fill_rect(rect).unwrap();
+                }
+            } else if oscstyle == "dots" {
+                for _dy in -1..y {
+                    let color_index = (y as usize) % osc_colors.len();
+                    let scope_color = osc_colors[color_index];
+                    let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                    canvas.set_draw_color(scope_color);
+                    canvas.fill_rect(rect).unwrap();
+                }
+            } else {
+                eprintln!("Invalid oscilloscope style. Supported styles: lines, solid, dots.");
+                // You can handle this error case according to your needs
+                // ...
             }
-        } else if oscstyle == "solid" {
-            if y >= 8{
-                top = 8;
+        }
+
+    } else if vis == 0{
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let x = *x;
+            let y = *y;
+    
+            let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
+            let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
+
+            let mut top = y;
+            let mut bottom = 16;
+
+            if y >= 16{
+                top = 17;
                 bottom = y;
             } else {
-                top = y;
-                bottom = 7;
+                top = y +1;
+                bottom = 16;
             }
 
             for dy in top..=bottom {
-                let color_index = (y as usize) % osc_colors.len();
-                let scope_color = osc_colors[color_index];
+                let color_index = (dy as usize + 2) % _colors.len();
+                let color = _colors[color_index];
                 let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
-                canvas.set_draw_color(scope_color);
+                canvas.set_draw_color(color);
                 canvas.fill_rect(rect).unwrap();
             }
-        } else if oscstyle == "dots" {
-            for _dy in -1..y {
-                let color_index = (y as usize) % osc_colors.len();
-                let scope_color = osc_colors[color_index];
-                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
-                canvas.set_draw_color(scope_color);
-                canvas.fill_rect(rect).unwrap();
-            }
-        } else {
-            eprintln!("Invalid oscilloscope style. Supported styles: lines, solid, dots.");
-            // You can handle this error case according to your needs
-            // ...
         }
+    } else if vis == 2{
     }
 }
 
@@ -239,6 +271,7 @@ fn main() -> Result<(), anyhow::Error> {
     // Load the custom viscolor.txt file
     let mut viscolors = viscolors::load_colors(&args.viscolor);
     let mut osc_colors = osc_colors_and_peak(&viscolors);
+    let mut vis = 0;
 
     let selected_device_index = match args.device {
         Some(index) => {
@@ -281,6 +314,10 @@ fn main() -> Result<(), anyhow::Error> {
                 Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
                     switch_oscstyle(&mut oscstyle);
                 }
+                Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } => {
+                    vis = (vis + 1) % 3;
+                    //println!("{vis}")
+                }
                 _ => {}
             }
         }
@@ -296,7 +333,7 @@ fn main() -> Result<(), anyhow::Error> {
         *audio_data = audio_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle/* , modern*/);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, vis/* , modern*/);
 
         canvas.present();
 
@@ -341,7 +378,6 @@ fn enumerate_audio_devices() {
         }
     }
 }
-
 
 fn osc_colors_and_peak(colors: &[Color]) -> Vec<Color> {
     if colors.len() == 35 {
