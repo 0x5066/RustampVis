@@ -8,6 +8,7 @@ use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use std::sync::{Arc, Mutex};
 use sdl2::keyboard::Keycode;
+use sdl2::mouse::MouseButton;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use anyhow;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -36,6 +37,15 @@ struct Args {
     /// Index of the input device to use
     #[arg(short, long)]
     device: Option<usize>,
+}
+
+fn switch_oscstyle(oscstyle: &mut &str) {
+    match *oscstyle {
+        "dots" => *oscstyle = "lines",
+        "lines" => *oscstyle = "solid",
+        "solid" => *oscstyle = "dots",
+        _ => println!("Invalid oscilloscope style. Supported styles: dots, lines, solid."),
+    }
 }
 
 fn draw_oscilloscope(
@@ -160,18 +170,31 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
 
     let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         // Convert f32 samples to u8 (0-255) and collect them into a Vec<u8>
-        let left_channel_samples: Vec<u8> = data
+        let left: Vec<u8> = data
             .iter()
-            .step_by(14) // Skip every other sample (right channel)
-            .map(|&sample| ((-sample + 1.03) * 127.5) as u8)
+            .step_by(16) // Skip every other sample (right channel)
+            .map(|&sample| ((-sample + 1.0) * 127.5) as u8)
+            .collect();
+
+        let right: Vec<u8> = data
+            .iter()
+            .skip(1)
+            .step_by(16) // Skip every other sample (right channel)
+            .map(|&sample| ((-sample + 1.0) * 127.5) as u8)
+            .collect();
+
+            let mixed: Vec<u8> = left
+            .iter()
+            .zip(right.iter())
+            .map(|(left_sample, right_sample)| (((*left_sample as f32 + *right_sample as f32) / 2.0) + 5.0) as u8)
             .collect();
 
         // Extend the ring buffer with the new samples
-        for sample in &left_channel_samples {
+        for left_sample in &mixed {
             if ring_buffer.len() == ring_buffer.capacity() {
                 ring_buffer.pop_front(); // Remove the oldest sample when the buffer is full
             }
-            ring_buffer.push_back(*sample);
+            ring_buffer.push_back(*left_sample);
         }
 
         // Convert the ring buffer to a regular Vec<u8> and send it through the channel
@@ -192,7 +215,6 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
     }
 }
 
-
 fn main() -> Result<(), anyhow::Error> {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -207,7 +229,7 @@ fn main() -> Result<(), anyhow::Error> {
         }
 
     // Extract the oscstyle field from Args struct
-    let oscstyle = args.oscstyle.as_str(); // Convert String to &str
+    let mut oscstyle = args.oscstyle.as_str(); // Convert String to &str
     let window = video_subsystem
         .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * ZOOM) as u32, (WINDOW_HEIGHT * ZOOM) as u32)
         .position_centered()
@@ -255,6 +277,9 @@ fn main() -> Result<(), anyhow::Error> {
                     let new_osc_colors = osc_colors_and_peak(&new_viscolors);
                     viscolors = new_viscolors;
                     osc_colors = new_osc_colors;
+                }
+                Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
+                    switch_oscstyle(&mut oscstyle);
                 }
                 _ => {}
             }
