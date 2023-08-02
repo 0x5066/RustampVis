@@ -21,7 +21,6 @@ mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
-const ZOOM: i32 = 7;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -30,6 +29,9 @@ struct Args {
     #[arg(short, long, default_value = "lines")]
     oscstyle: String, // Change this to String
 
+    #[arg(short, long, default_value = "normal")]
+    specdraw: String, // Change this to String
+
     /// Name of the custom viscolor.txt file
     #[arg(short, long, default_value = "viscolor.txt")]
     viscolor: String,
@@ -37,6 +39,10 @@ struct Args {
     /// Index of the input device to use
     #[arg(short, long)]
     device: Option<usize>,
+
+    /// zoom
+    #[arg(short, long, default_value = "7")]
+    zoom: i32,
 }
 
 fn switch_oscstyle(oscstyle: &mut &str) {
@@ -48,27 +54,40 @@ fn switch_oscstyle(oscstyle: &mut &str) {
     }
 }
 
+fn switch_specstyle(specdraw: &mut &str) {
+    match *specdraw {
+        "normal" => *specdraw = "fire",
+        "fire" => *specdraw = "line",
+        "line" => *specdraw = "normal",
+        _ => println!("Invalid analyzer style. Supported styles: normal, fire, line."),
+    }
+}
+
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     osc_colors: &[Color],
     ys: &[u8],
     oscstyle: &str,
+    specdraw: &str,
     vis: u8,
+    zoom: i32,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().map(|&sample| (sample as i32 / 8) - 9).collect(); // cast to i32
 
     let mut last_y = 0;
+    let mut top: i32 = 0; //bro it is being read though wth?!
+    let mut bottom: i32 = 0;
 
     for x in 0..WINDOW_WIDTH {
         for y in 0..WINDOW_HEIGHT {
             if x % 2 == 1 || y % 2 == 0 {
-                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                let rect = Rect::new(x * zoom, y * zoom, zoom as u32, zoom as u32);
                 canvas.set_draw_color(_colors[0]);
                 canvas.fill_rect(rect).unwrap();
             } else {
-                let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                let rect = Rect::new(x * zoom, y * zoom, zoom as u32, zoom as u32);
                 canvas.set_draw_color(_colors[1]);
                 canvas.fill_rect(rect).unwrap();
             }
@@ -86,8 +105,8 @@ fn draw_oscilloscope(
                 last_y = y;
             }
     
-            let mut top = y;
-            let mut bottom = last_y;
+            top = y;
+            bottom = last_y;
             last_y = y;
     
             if oscstyle == "lines" {
@@ -99,7 +118,7 @@ fn draw_oscilloscope(
                 for dy in top..=bottom {
                     let color_index = (top as usize) % osc_colors.len();
                     let scope_color = osc_colors[color_index];
-                    let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                    let rect = Rect::new(x * zoom, dy * zoom, zoom as u32, zoom as u32);
                     canvas.set_draw_color(scope_color);
                     canvas.fill_rect(rect).unwrap();
                 }
@@ -115,7 +134,7 @@ fn draw_oscilloscope(
                 for dy in top..=bottom {
                     let color_index = (y as usize) % osc_colors.len();
                     let scope_color = osc_colors[color_index];
-                    let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                    let rect = Rect::new(x * zoom, dy * zoom, zoom as u32, zoom as u32);
                     canvas.set_draw_color(scope_color);
                     canvas.fill_rect(rect).unwrap();
                 }
@@ -123,7 +142,7 @@ fn draw_oscilloscope(
                 for _dy in -1..y {
                     let color_index = (y as usize) % osc_colors.len();
                     let scope_color = osc_colors[color_index];
-                    let rect = Rect::new(x * ZOOM, y * ZOOM, ZOOM as u32, ZOOM as u32);
+                    let rect = Rect::new(x * zoom, y * zoom, zoom as u32, zoom as u32);
                     canvas.set_draw_color(scope_color);
                     canvas.fill_rect(rect).unwrap();
                 }
@@ -142,8 +161,8 @@ fn draw_oscilloscope(
             let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
             let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
 
-            let mut top = y;
-            let mut bottom = 16;
+            top = y; //come on now :|
+            bottom = 16;
 
             if y >= 16{
                 top = 17;
@@ -154,9 +173,18 @@ fn draw_oscilloscope(
             }
 
             for dy in top..=bottom {
-                let color_index = (dy as usize + 2) % _colors.len();
+                let color_index: usize;
+                if specdraw == "normal"{
+                    color_index = (dy as usize + 2) % _colors.len();
+                } else if specdraw == "fire" {
+                    color_index = (dy as usize - y as usize + 2) % _colors.len();
+                } else if specdraw == "line" {
+                    color_index = (y as usize + 3) % _colors.len();                  
+                } else {
+                    color_index = 0;
+                }
                 let color = _colors[color_index];
-                let rect = Rect::new(x * ZOOM, dy * ZOOM, ZOOM as u32, ZOOM as u32);
+                let rect = Rect::new(x * zoom, dy * zoom, zoom as u32, zoom as u32);
                 canvas.set_draw_color(color);
                 canvas.fill_rect(rect).unwrap();
             }
@@ -262,8 +290,10 @@ fn main() -> Result<(), anyhow::Error> {
 
     // Extract the oscstyle field from Args struct
     let mut oscstyle = args.oscstyle.as_str(); // Convert String to &str
+    let mut specdraw = args.specdraw.as_str();
+    let zoom = args.zoom;
     let window = video_subsystem
-        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * ZOOM) as u32, (WINDOW_HEIGHT * ZOOM) as u32)
+        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
         .position_centered()
         .build()
         .unwrap();
@@ -312,7 +342,11 @@ fn main() -> Result<(), anyhow::Error> {
                     osc_colors = new_osc_colors;
                 }
                 Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
-                    switch_oscstyle(&mut oscstyle);
+                    if vis == 1{
+                        switch_oscstyle(&mut oscstyle);
+                    } else if vis == 0 {
+                        switch_specstyle(&mut specdraw);
+                    }
                 }
                 Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } => {
                     vis = (vis + 1) % 3;
@@ -333,7 +367,7 @@ fn main() -> Result<(), anyhow::Error> {
         *audio_data = audio_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, vis/* , modern*/);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, specdraw, vis, zoom/* , modern*/);
 
         canvas.present();
 
