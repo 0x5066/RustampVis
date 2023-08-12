@@ -29,6 +29,7 @@ struct Args {
     #[arg(short, long, default_value = "lines")]
     oscstyle: String, // Change this to String
 
+    /// Spectrum Analyzer style
     #[arg(short, long, default_value = "normal")]
     specdraw: String, // Change this to String
 
@@ -36,13 +37,16 @@ struct Args {
     #[arg(short, long, default_value = "viscolor.txt")]
     viscolor: String,
     
-    /// Index of the input device to use
+    /// Index of the audio device to use
     #[arg(short, long)]
     device: Option<usize>,
 
-    /// zoom
+    /// Zoom factor
     #[arg(short, long, default_value = "7")]
     zoom: i32,
+
+    #[arg(short, long, default_value = "1.0")]
+    amp: f32,
 }
 
 fn switch_oscstyle(oscstyle: &mut &str) {
@@ -193,30 +197,48 @@ fn draw_oscilloscope(
     }
 }
 
-fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) {
+fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, amp: f32) {
     enum ConfigType {
-        Windows(cpal::SupportedStreamConfig),
+        WindowsOutput(cpal::SupportedStreamConfig),
+        WindowsInput(cpal::SupportedStreamConfig),
         Unix(cpal::StreamConfig),
+        Darwin(cpal::SupportedStreamConfig),
     }
     let host = cpal::default_host();
     let device = match selected_device_index {
-        Some(index) => host
-            .devices()
-            .expect("Failed to retrieve output devices.")
-            .nth(index)
-            .expect("Invalid device index."),
-        None => todo!(), // i dont plan to change this so consider this a stub
+        Some(index) => {
+            let mut devices = host.devices().expect("Failed to retrieve devices");
+            let device = devices.nth(index).expect("Invalid device index.");
+            device
+        }
+        None => todo!(), // Consider a proper fallback here
     };
-    let config: ConfigType; // Declare the config variable here
+    let config: ConfigType;
 
     if cfg!(windows) {
-        config = ConfigType::Windows(device.default_output_config().expect("Failed to get default output config"));
+        let supports_input = device.supported_input_configs().is_ok();
+        if supports_input {
+            let input_config = device.default_input_config();
+            match input_config {
+                Ok(conf) => {
+                    config = ConfigType::WindowsInput(conf);
+                }
+                Err(_) => {
+                    // Fallback to output stream if input config is not supported
+                    config = ConfigType::WindowsOutput(device.default_output_config().expect("Failed to get default output config"));
+                }
+            }
+        } else {
+            config = ConfigType::WindowsOutput(device.default_output_config().expect("Failed to get default output config"));
+        }
     } else if cfg!(unix) {
         config = ConfigType::Unix(cpal::StreamConfig {
             channels: 2,
             sample_rate: cpal::SampleRate(44100),
-            buffer_size: cpal::BufferSize::Fixed(2048), //not 1152 or 576 but eh, visually it looks *close* enough.
+            buffer_size: cpal::BufferSize::Fixed(2048),
         });
+    } else if cfg!(macos) {
+        config = ConfigType::Darwin(device.default_output_config().expect("Failed to get default output config"));
     } else {
         panic!("Unsupported platform");
     }
@@ -233,14 +255,14 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
         let left: Vec<u8> = data
             .iter()
             .step_by(16) // Skip every other sample (right channel)
-            .map(|&sample| ((-sample + 1.0) * 127.5) as u8)
+            .map(|&sample| (((-sample * amp) + 1.0) * 127.5) as u8)
             .collect();
 
         let right: Vec<u8> = data
             .iter()
             .skip(1)
             .step_by(16) // Skip every other sample (right channel)
-            .map(|&sample| ((-sample + 1.0) * 127.5) as u8)
+            .map(|&sample| (((-sample * amp) + 1.0) * 127.5) as u8)
             .collect();
 
             let mixed: Vec<u8> = left
@@ -263,10 +285,13 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
 
     // When creating the stream, pattern match on the ConfigType to get the appropriate config
     let stream = match config {
-        ConfigType::Windows(conf) => device.build_input_stream(&conf.into(), callback, err_fn, None),
+        ConfigType::WindowsOutput(conf) | ConfigType::WindowsInput(conf) => {
+            device.build_input_stream(&conf.into(), callback, err_fn, None)
+        }
         ConfigType::Unix(conf) => device.build_input_stream(&conf.into(), callback, err_fn, None),
+        ConfigType::Darwin(conf) => device.build_input_stream(&conf.into(), callback, err_fn, None),
     }
-    .unwrap();
+    .unwrap();    
     stream.play().unwrap();
 
     // The audio stream loop should not block, so we use an empty loop.
@@ -276,22 +301,23 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>) 
 }
 
 fn main() -> Result<(), anyhow::Error> {
+    let args = Args::parse();
+    // Check if the --device argument is provided
+    if args.device.is_none() {
+        // If device is not specified, just print the available audio devices and exit.
+        enumerate_audio_devices();
+        return Ok(());
+    }
+    
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     //let args: Vec<String> = env::args().collect();
-
-    let args = Args::parse();
-        // Check if the --device argument is provided
-        if args.device.is_none() {
-            // If device is not specified, just print the available audio devices and exit.
-            enumerate_audio_devices();
-            return Ok(());
-        }
 
     // Extract the oscstyle field from Args struct
     let mut oscstyle = args.oscstyle.as_str(); // Convert String to &str
     let mut specdraw = args.specdraw.as_str();
     let zoom = args.zoom;
+    let amp = args.amp;
     let window = video_subsystem
         .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
         .position_centered()
@@ -328,7 +354,7 @@ fn main() -> Result<(), anyhow::Error> {
     let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx, Some(selected_device_index)));
+    thread::spawn(move || audio_stream_loop(tx, Some(selected_device_index), amp));
 
     'running: loop {
         for event in event_pump.poll_iter() {
