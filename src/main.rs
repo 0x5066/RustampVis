@@ -45,8 +45,13 @@ struct Args {
     #[arg(short, long, default_value = "7")]
     zoom: i32,
 
+    /// Amplify the incoming signal
     #[arg(short, long, default_value = "1.0")]
     amp: f32,
+
+    /// Specify the visualization mode to use
+    #[arg(short, long, default_value = "1")]
+    mode: u8,
 }
 
 fn switch_oscstyle(oscstyle: &mut &str) {
@@ -74,7 +79,7 @@ fn draw_oscilloscope(
     ys: &[u8],
     oscstyle: &str,
     specdraw: &str,
-    vis: u8,
+    mode: u8,
     zoom: i32,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
@@ -97,7 +102,7 @@ fn draw_oscilloscope(
             }
         }
     }
-    if vis == 1{
+    if mode == 1{
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
             let y = *y;
@@ -157,10 +162,14 @@ fn draw_oscilloscope(
             }
         }
 
-    } else if vis == 0{
+    } else if mode == 0{
+        let ys: Vec<i32> = vec![-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 15, 15, 15, 15, 15, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -1, -1];
+        //debug array until i figure out FFT
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
             let y = *y;
+            let intensity = y;
+            println!("{intensity}");
     
             let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
             let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
@@ -172,7 +181,7 @@ fn draw_oscilloscope(
                 top = 17;
                 bottom = y;
             } else {
-                top = y +1;
+                top = y + 1;
                 bottom = 16;
             }
 
@@ -183,7 +192,11 @@ fn draw_oscilloscope(
                 } else if specdraw == "fire" {
                     color_index = (dy as usize - y as usize + 2) % _colors.len();
                 } else if specdraw == "line" {
-                    color_index = (y as usize + 3) % _colors.len();                  
+                    if intensity == -1 {
+                        color_index = 2;
+                    } else {
+                        color_index = (2u32).wrapping_add(intensity as u32) as usize % _colors.len();
+                    } 
                 } else {
                     color_index = 0;
                 }
@@ -193,7 +206,7 @@ fn draw_oscilloscope(
                 canvas.fill_rect(rect).unwrap();
             }
         }
-    } else if vis == 2{
+    } else if mode == 2{
     }
 }
 
@@ -302,12 +315,24 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, 
 
 fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
-    // Check if the --device argument is provided
-    if args.device.is_none() {
-        // If device is not specified, just print the available audio devices and exit.
-        enumerate_audio_devices();
-        return Ok(());
-    }
+
+    let selected_device_index = match args.device {
+        Some(index) => {
+            if index == 0 {
+                eprintln!("Device index should start from 1.");
+                std::process::exit(1);
+            }
+            index - 1
+        }
+        None => {
+            // Prompt the user to select an audio device
+            let selected_device_index = prompt_for_device();
+            if selected_device_index.is_none() {
+                std::process::exit(1);
+            }
+            selected_device_index.unwrap()
+        }
+    };
     
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -327,21 +352,7 @@ fn main() -> Result<(), anyhow::Error> {
     // Load the custom viscolor.txt file
     let mut viscolors = viscolors::load_colors(&args.viscolor);
     let mut osc_colors = osc_colors_and_peak(&viscolors);
-    let mut vis = 0;
-
-    let selected_device_index = match args.device {
-        Some(index) => {
-            if index == 0 {
-                eprintln!("Device index should start from 1.");
-                std::process::exit(1);
-            }
-            index - 1 // Subtract 1 to make it 0-based
-        }
-        None => {
-            enumerate_audio_devices();
-            std::process::exit(0);
-        }
-    };
+    let mut mode = args.mode;
 
     let mut canvas = window.into_canvas().build().unwrap();
 
@@ -368,15 +379,15 @@ fn main() -> Result<(), anyhow::Error> {
                     osc_colors = new_osc_colors;
                 }
                 Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
-                    if vis == 1{
+                    if mode == 1{
                         switch_oscstyle(&mut oscstyle);
-                    } else if vis == 0 {
+                    } else if mode == 0 {
                         switch_specstyle(&mut specdraw);
                     }
                 }
                 Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } => {
-                    vis = (vis + 1) % 3;
-                    //println!("{vis}")
+                    mode = (mode + 1) % 3;
+                    //println!("{mode}")
                 }
                 _ => {}
             }
@@ -393,7 +404,7 @@ fn main() -> Result<(), anyhow::Error> {
         *audio_data = audio_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, specdraw, vis, zoom/* , modern*/);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, specdraw, mode, zoom/* , modern*/);
 
         canvas.present();
 
@@ -404,6 +415,33 @@ fn main() -> Result<(), anyhow::Error> {
     //audio_thread.join().unwrap();
     //gracefully my ass ChatGPT, this shit hung the entire thing on closing
     Ok(())
+}
+
+fn prompt_for_device() -> Option<usize> {
+    let host = cpal::default_host();
+    let devices = host.devices().expect("Failed to retrieve devices").collect::<Vec<_>>();
+    
+    println!("Available audio devices:");
+    for (index, device) in devices.iter().enumerate() {
+        println!("{}. {}", index + 1, device.name().unwrap_or("Unknown Device".to_string()));
+    }
+    
+    println!("Enter the number of the audio device (Speakers or Microphone) to visualize: ");
+
+    loop {
+        //println!("Please select an audio device (1 - {}):", devices.len());
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).expect("Failed to read line");
+
+        if let Ok(index) = input.trim().parse::<usize>() {
+            if index > 0 && index <= devices.len() {
+                return Some(index - 1); // Convert to 0-based index
+            } else {
+                println!("Invalid input.");
+                println!("Please select an audio device (1 - {}):", devices.len());
+            }
+        }
+    }
 }
 
 fn enumerate_audio_devices() {

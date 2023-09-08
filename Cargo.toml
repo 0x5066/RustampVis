@@ -11,3 +11,4 @@ cpal = { version = "*"}
 anyhow = "1.0.72"
 crossbeam-channel = "0.5.8"
 clap = { version = "4.3.19", features = ["derive"] }
+# audioviz = { version = "*"}
