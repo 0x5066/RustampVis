@@ -21,6 +21,9 @@ mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
+const NUM_BARS: usize = 75;
+const DECAY_RATE: f64 = 0.0003; // Adjust the decay rate as needed
+
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,8 +53,33 @@ struct Args {
     amp: f32,
 
     /// Specify the visualization mode to use
-    #[arg(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "0")]
     mode: u8,
+}
+
+#[derive(Clone)]
+struct Bar {
+    height: f64,
+    peak: f64,
+    gravity: f64,
+    fft_data: Vec<i32>,
+}
+
+impl Bar {
+    fn new() -> Self {
+        Self {
+            height: 0.0,
+            peak: 0.0,
+            gravity: 0.0,
+            fft_data: Vec::new(),
+        }
+    }
+}
+
+fn hamming_window(n: usize) -> Vec<f32> {
+    (0..n)
+        .map(|i| 0.54 - 0.46 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32))
+        .collect()
 }
 
 fn switch_oscstyle(oscstyle: &mut &str) {
@@ -77,13 +105,57 @@ fn draw_oscilloscope(
     _colors: &[Color],
     osc_colors: &[Color],
     ys: &[u8],
+    fft: &[u8],
     oscstyle: &str,
     specdraw: &str,
     mode: u8,
     zoom: i32,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
-    let ys: Vec<i32> = ys.iter().map(|&sample| (sample as i32 / 8) - 9).collect(); // cast to i32
+    let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
+    let fft: Vec<i32> = fft.iter().step_by(11).map(|&sample| ((sample as i32 / 8) - 9)).collect(); // cast to i32
+
+    let mut bars: Vec<Bar> = vec![Bar::new(); NUM_BARS];
+
+    let mut peak1: f64 = 0.0;
+
+    // Process your FFT data and store it in the respective Bar instances
+
+    // Iterate over all bars to process FFT data and update peaks.
+    for (bar, fft_chunk) in bars.iter_mut().zip(fft.chunks(fft.len() / NUM_BARS)) {
+        bar.fft_data = fft_chunk.to_vec();
+
+        // Calculate the level1 (you need to define how to calculate this based on your FFT data).
+        // For example, let's assume it's the average value of the FFT data.
+        let level1: f64 = fft_chunk.iter().map(|&x| x as f64).sum::<f64>() / fft_chunk.len() as f64 + 9.0;
+
+        bar.height = level1;
+
+        // Update the peak based on the comparison with level1.
+        if level1 <= bar.peak {
+            bar.peak = level1;
+        } else {
+            // Calculate the amount to decrease the peak based on the decay rate.
+
+            // Ensure 'bar.peak' does not go below a certain minimum value (e.g., 0.0).
+            bar.peak += 1.0;
+        }
+        //println!("level1: {:?}, bar.peak: {:?}", level1, bar.peak);
+    }
+
+    // Extract FFT data for a specific bar (e.g., the first one) after the loop
+    //let first_bar_fft_data = &bars[0].peak;
+
+    // Now you can use the first_bar_fft_data variable without issues
+    //println!("{:?}", &bars[0].peak);
+
+/*     if &bars[0].height >= &peak1 {
+        peak1 = bars[0].height;
+    } else {
+        peak1 -= DECAY_RATE;
+    } 
+
+    println!("{peak1}"); */
 
     let mut last_y = 0;
     let mut top: i32 = 0; //bro it is being read though wth?!
@@ -102,13 +174,29 @@ fn draw_oscilloscope(
             }
         }
     }
+
+/*     for (index, bar) in bars.iter_mut().enumerate() {
+        // Perform your peak update logic (similar to what you've described earlier)
+        // For demonstration purposes, we'll just set peak1 to a random value.
+        //bar.peak = rand::random::<f64>() * 100.0;
+
+        // Calculate the bar's position and height based on peak
+        let bar_x = (index as i32 * (WINDOW_WIDTH / NUM_BARS as i32)) as i32;
+        //let bar_height = (bar.peak) as i32 * zoom;
+
+        // Create and draw the bar as a rectangle
+        let rect = Rect::new(bar_x * zoom, peak1 as i32, zoom as u32, zoom as u32);
+        canvas.set_draw_color(Color::RGB(255, 0, 0)); // Set your desired color
+        canvas.fill_rect(rect).unwrap();
+    } */
+
     if mode == 1{
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
             let y = *y;
     
-            let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
-            let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
+            let x = std::cmp::min(std::cmp::max(x, 0), 75 - 1);
+            let y = std::cmp::min(std::cmp::max(y, 0), 16 - 1);
     
             if x == 0 {
                 last_y = y;
@@ -163,16 +251,14 @@ fn draw_oscilloscope(
         }
 
     } else if mode == 0{
-        let ys: Vec<i32> = vec![-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15, 15, 15, 15, 15, 15, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -1, -1];
+        //let ys: Vec<i32> = vec![156246, 100569, 28685, 32621, 28655, 14996, 17003, 1479, 11935, 5861, 7520, 8576, 3010, 7934, 1077, 5509, 4701, 5180, 5782, 3093, 4452, 436, 3471, 2699, 2558, 4720, 717, 5868, 2421, 2884, 1485, 2499, 1833, 675, 1918, 924, 1676, 3008, 2078, 2807, 706, 2600, 738, 2264, 1311, 1586, 1008, 356, 1813, 855, 1640, 1642, 929, 1759, 244, 1682, 717, 1320, 1554, 625, 1525, 71, 1487, 969, 1851, 3035, 1552, 1978, 461, 1660, 879, 1070, 1092, 1733, 3462, 1137, 1269, 685, 1173, 1183, 453, 1196, 303, 1080, 770, 975, 1069, 356, 1037, 179, 1074, 694, 825, 1022, 246, 959, 185, 898, 727, 692, 1024, 234, 845, 258, 843, 708, 594, 940, 139, 764, 302, 792, 705, 521, 874, 64, 711, 323, 733, 707, 458, 828, 29, 642, 350, 660, 708, 376, 793, 47, 643, 387, 622, 683, 329, 750, 77, 582, 380, 526, 686, 248, 716, 126, 601, 398, 499, 674, 200, 684, 124, 570, 433, 494, 645, 181, 637, 80, 447, 468, 401, 664, 153, 577, 200, 502, 486, 413, 600, 83, 560, 185, 459, 496, 367, 583, 50, 521, 219, 474, 461, 302, 578, 42, 436, 189, 420, 455, 248, 545, 67, 455, 260, 390, 521, 266, 529, 48, 391, 265, 392, 457, 176, 515, 58, 372, 274, 349, 477, 156, 497, 84, 349, 340, 362, 475, 127, 499, 82, 363, 300, 324, 435, 87, 452, 106, 341, 320, 266, 474, 71, 442, 138, 363, 320, 253, 465, 64, 410, 122, 303, 350, 227, 453, 42, 378, 152, 318, 322, 172, 448, 31, 359, 183, 288, 374, 179, 435, 31, 321, 181, 275, 363, 138, 435, 60, 323, 193, 241, 397, 134, 422, 39, 293, 218, 256, 363, 104, 395, 60, 261, 248, 251, 365, 93, 368, 72, 249, 242, 217, 367, 70, 354, 109, 258, 243, 177, 375, 39, 334, 113, 253, 265, 183, 360, 17, 321, 122, 248, 262, 147, 369, 23, 323, 119, 209, 294, 142, 345, 40, 315, 130, 210, 297, 112, 371, 29, 293, 117, 175, 321, 109, 356, 45, 281, 168, 207, 308, 112, 330, 32, 218, 191, 199, 297, 70, 333, 78, 213, 191, 179, 320, 82, 302, 72, 211, 194, 159, 298, 39, 298, 84, 194, 209, 138, 310, 19, 290, 97, 190, 208, 112, 317, 34, 288, 99, 187, 228, 135, 289, 5, 255, 105, 155, 249, 106, 300, 35, 248, 129, 165, 262, 112, 290, 54, 221, 114, 132, 268, 69, 311, 38, 211, 135, 151, 243, 52, 275, 65, 201, 143, 115, 266, 36, 301, 68, 196, 157, 130, 265, 29, 286, 80, 196, 170, 120, 270, 25, 250, 96, 164, 195, 107, 282, 27, 256, 90, 161, 194, 86, 283, 22, 277, 85, 146, 183, 65, 285, 33, 253, 87, 131, 196, 54, 291, 24, 229, 102, 118, 235, 82, 245, 51, 209, 119, 145, 210, 56, 256, 39, 177, 129, 104, 231, 34, 264, 70, 190, 145, 131, 222, 35, 235, 74, 166, 164, 111, 242, 15, 253, 76, 158, 145, 96, 240, 4, 254, 73, 155, 168, 76, 248, 11, 237, 91, 138, 180, 91, 241, 18, 219, 103, 150, 183, 67, 237, 27, 185, 127, 132, 198, 61, 253, 28, 204, 101, 104, 205, 55, 235, 43, 184, 113, 109, 181, 25, 246, 49, 162, 125, 102, 207, 34, 224, 76, 167, 137, 92, 196, 29, 207, 89, 161, 126, 88, 202, 21, 211, 95, 158, 134, 73, 204, 38, 229, 76, 147, 140, 60, 204, 38, 187, 116, 130, 164, 56, 228, 28, 200, 105, 103, 153, 46, 225, 41, 203, 111, 118, 172, 50, 217, 38, 179, 107, 89, 177, 33, 225, 56, 176, 123, 97, 170, 28, 209, 69, 179, 115, 98, 170, 26, 198, 71, 143, 132, 84, 193, 26, 223, 61, 146, 121, 63, 194, 16, 192, 80, 113, 132, 52, 183, 28, 194, 96, 123, 144, 48, 215, 15, 187, 94, 111, 138, 58, 194, 45, 179, 115, 105, 143, 39, 199, 47, 180, 110, 103, 140, 13, 207, 58, 172, 111, 78, 156, 25, 195, 69, 171, 116, 87, 152, 11, 195, 76, 153, 122, 72, 158, 11, 199, 94, 164, 114, 63, 176, 20, 211, 71, 131, 124, 55, 182, 14, 182, 94, 121, 132, 55, 176, 35, 190, 106, 125, 126, 48, 185, 29, 180, 110, 125, 126, 42, 189, 42, 178, 111, 107, 123, 48, 194, 47, 172, 111, 107, 142, 31, 179, 60, 155, 122, 97, 145, 12, 178, 71, 144, 134, 94, 140, 20, 195, 86, 156, 117, 57, 154, 22, 197, 73, 135, 129, 61, 160, 28, 176, 88, 135, 115, 52, 160, 31, 187, 88, 115, 127, 47, 169, 28, 177, 100, 121, 113, 37, 158, 42, 175, 92, 96, 118, 32, 151, 48, 139, 128, 92, 120, 11, 171, 66, 161, 120, 82, 145, 20, 179, 54, 150, 122, 86, 117, 32, 185, 68, 147, 125, 76, 123, 24, 183, 59, 126, 116, 52, 149, 8, 150, 84, 117, 130, 61, 162, 18, 159, 99, 113, 131, 42, 155, 33, 169, 98, 106, 136, 38, 159, 37, 156, 112, 106, 122, 29, 164, 42, 160, 118, 111, 118, 25, 155, 69, 167, 112, 85, 135, 25, 149, 65, 142, 128, 83, 123, 12, 165, 72, 146, 135, 95, 121, 15, 169, 72, 144, 114, 65, 133, 18, 164, 85, 132, 118, 43, 128, 19, 155, 96, 122, 129, 47, 137, 22, 149, 100, 96, 150, 36, 153, 22, 148, 112, 111, 141, 47, 133, 55, 157, 117, 109, 132, 35, 132, 58, 146, 115, 84, 134, 18, 132, 77, 141, 133, 85, 127, 5, 154, 80, 150, 128, 70, 143, 15, 148, 77, 138, 136, 80, 122, 9, 152, 81, 121, 141, 51, 146, 27, 175, 88, 145, 128, 64, 133, 43, 90, 88, 81, 144, 53, 123, 52, 113, 185, 145, 158, 46, 164, 6, 153, 91, 106, 127, 33, 139, 62, 158, 116, 96, 150, 31, 151, 28, 125, 118, 82, 144, 34, 126, 73, 139, 123, 81, 128, 14, 87, 122, 141, 147, 73, 162, 47, 108, 124, 136, 163, 99, 103, 11, 125, 126, 170, 102, 46, 133, 15, 138, 102, 117, 154, 66, 127, 39, 152, 88, 106, 133, 31];
         //debug array until i figure out FFT
-        for (x, y) in xs.iter().zip(ys.iter()) {
+        for (x, y) in xs.iter().zip(fft.iter()) {
             let x = *x;
-            let y = *y;
-            let intensity = y;
-            println!("{intensity}");
+            let y = -*y+6;
     
-            let x = std::cmp::min(std::cmp::max(x, 0), WINDOW_WIDTH - 1);
-            let y = std::cmp::min(std::cmp::max(y, 0), (WINDOW_HEIGHT - 1).try_into().unwrap());
+            let x = std::cmp::min(std::cmp::max(x, 0), 75 - 1);
+            let y = std::cmp::min(std::cmp::max(y, 0), 16 - 1);
 
             top = y; //come on now :|
             bottom = 16;
@@ -192,10 +278,10 @@ fn draw_oscilloscope(
                 } else if specdraw == "fire" {
                     color_index = (dy as usize - y as usize + 2) % _colors.len();
                 } else if specdraw == "line" {
-                    if intensity == -1 {
+                    if y == -1 {
                         color_index = 2;
                     } else {
-                        color_index = (2u32).wrapping_add(intensity as u32) as usize % _colors.len();
+                        color_index = (2u32).wrapping_add(y as u32) as usize % _colors.len();
                     } 
                 } else {
                     color_index = 0;
@@ -210,7 +296,7 @@ fn draw_oscilloscope(
     }
 }
 
-fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, amp: f32) {
+fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_index: Option<usize>, amp: f32) {
     enum ConfigType {
         WindowsOutput(cpal::SupportedStreamConfig),
         WindowsInput(cpal::SupportedStreamConfig),
@@ -257,7 +343,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, 
     }
 
     // ring buffer (VecDeque)
-    let mut ring_buffer: VecDeque<u8> = VecDeque::with_capacity(75); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
+    let mut ring_buffer: VecDeque<u8> = VecDeque::with_capacity(2048); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
@@ -265,23 +351,29 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, 
 
     let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         // Convert f32 samples to u8 (0-255) and collect them into a Vec<u8>
-        let left: Vec<u8> = data
+        let left: Vec<f32> = data
             .iter()
-            .step_by(16) // Skip every other sample (right channel)
-            .map(|&sample| (((-sample * amp) + 1.0) * 127.5) as u8)
+            /* .step_by(16) */ // Skip every other sample (right channel)
+            .map(|&sample| (((-sample * amp)) * 127.5))
             .collect();
 
-        let right: Vec<u8> = data
+        let right: Vec<f32> = data
             .iter()
             .skip(1)
-            .step_by(16) // Skip every other sample (right channel)
-            .map(|&sample| (((-sample * amp) + 1.0) * 127.5) as u8)
+            /* .step_by(16) */ // Skip every other sample (right channel)
+            .map(|&sample| (((-sample * amp)) * 127.5))
             .collect();
 
-            let mixed: Vec<u8> = left
+        let mixed: Vec<u8> = left
             .iter()
             .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample as f32 + *right_sample as f32) / 2.0) + 5.0) as u8)
+            .map(|(left_sample, right_sample)| (((*left_sample as f32 + *right_sample as f32 + 256.0) / 2.0) + 5.0) as u8)
+            .collect();
+
+        let mixed_fft: Vec<f32> = left
+            .iter()
+            .zip(right.iter())
+            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 2.0)))
             .collect();
 
         // Extend the ring buffer with the new samples
@@ -292,8 +384,35 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, selected_device_index: Option<usize>, 
             ring_buffer.push_back(*left_sample);
         }
 
+        // Apply the Hamming window to mixed_fft
+        let window = hamming_window(mixed_fft.len());
+
+        let windowed_mixed_fft: Vec<f32> = mixed_fft
+            .iter()
+            .zip(window.iter())
+            .map(|(&sample, &window_sample)| sample * window_sample / 6.0)
+            .collect();
+
+        // Convert mixed to a [f32; 16] array
+        let mut mixed_f32: [f32; 4096] = [0.0; 4096];
+        for (i, &sample) in windowed_mixed_fft.iter().enumerate() {
+            mixed_f32[i] = sample as f32;
+        }
+
+        // compute the RFFT of the samples
+        //let mut mixed_f32: [f32; 2048] = mixed.try_into().unwrap();
+        let spectrum = microfft::real::rfft_4096(&mut mixed_f32);
+        // since the real-valued coefficient at the Nyquist frequency is packed into the
+        // imaginary part of the DC bin, it must be cleared before computing the amplitudes
+        //spectrum[0].im = 0.0;
+
+        let amplitudes: Vec<_> = spectrum.iter().map(|c| c.l1_norm() as u8).collect();
+        //println!("{amplitudes:?}");
+        //assert_eq!(&amplitudes, &[0, 0, 0, 8, 0, 0, 0, 0]);
+
         // Convert the ring buffer to a regular Vec<u8> and send it through the channel
         tx.send(ring_buffer.iter().copied().collect()).unwrap();
+        s.send(amplitudes.iter().copied().collect()).unwrap();
     };
 
     // When creating the stream, pattern match on the ConfigType to get the appropriate config
@@ -360,12 +479,14 @@ fn main() -> Result<(), anyhow::Error> {
 
     // The vector to store captured audio samples.
     let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let spec_data = Arc::new(Mutex::new(Vec::<u8>::new()));
 
     // Create a blocking receiver to get audio samples from the audio stream loop.
     let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
+    let (s, r): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx, Some(selected_device_index), amp));
+    thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index), amp));
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -397,14 +518,18 @@ fn main() -> Result<(), anyhow::Error> {
         canvas.clear();
         // Lock the mutex and swap the captured audio samples with the visualization data.
         let audio_samples = rx.recv().unwrap();
+        let spec_samples = r.recv().unwrap();
         //println!("Captured audio samples: {:?}", audio_samples);
 
         // Lock the mutex and update the captured audio samples.
         let mut audio_data = audio_data.lock().unwrap();
         *audio_data = audio_samples;
+
+        let mut spec_data = spec_data.lock().unwrap();
+        *spec_data = spec_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, oscstyle, specdraw, mode, zoom/* , modern*/);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, zoom/* , modern*/);
 
         canvas.present();
 
@@ -440,39 +565,6 @@ fn prompt_for_device() -> Option<usize> {
                 println!("Invalid input.");
                 println!("Please select an audio device (1 - {}):", devices.len());
             }
-        }
-    }
-}
-
-fn enumerate_audio_devices() {
-    // Print supported and available hosts
-    //println!("Supported hosts:\n  {:?}", cpal::ALL_HOSTS);
-    let available_hosts = cpal::available_hosts();
-    println!("Available hosts:\n  {:?}", available_hosts);
-
-    for host_id in available_hosts {
-        println!("{}", host_id.name());
-        let host = cpal::host_from_id(host_id).expect("Error creating host");
-
-/*         let default_in = host.default_input_device().map(|e| e.name().unwrap());
-        println!("  Default Input Device:\n    {:?}", default_in); */
-
-        let devices = host.devices().expect("Error getting devices");
-        //println!("  Devices: ");
-        for (device_index, device) in devices.enumerate() {
-            println!("  {}. \"{}\"", device_index + 1, device.name().expect("Error getting device name"));
-
-            // Input configs
-/*             if let Ok(conf) = device.default_input_config() {
-                println!("    Default input stream config:\n      {:?}", conf);
-            }
-            let _input_configs = match device.supported_input_configs() {
-                Ok(f) => f.collect(),
-                Err(e) => {
-                    println!("    Error getting supported input configs: {:?}", e);
-                    Vec::new()
-                }
-            }; */
         }
     }
 }
