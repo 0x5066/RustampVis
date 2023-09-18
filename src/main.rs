@@ -21,9 +21,12 @@ mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
-const NUM_BARS: usize = 75;
+/* const NUM_BARS: usize = 75;
 const DECAY_RATE: f64 = 0.0003; // Adjust the decay rate as needed
 
+static mut LEVEL2: f32 = 15.0;
+static mut PEAK1: f64 = 0.0; */
+//static mut BINS: usize = 0;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -57,12 +60,11 @@ struct Args {
     mode: u8,
 }
 
-#[derive(Clone)]
+/* #[derive(Clone)]
 struct Bar {
     height: f64,
     peak: f64,
     gravity: f64,
-    fft_data: Vec<i32>,
 }
 
 impl Bar {
@@ -70,11 +72,10 @@ impl Bar {
         Self {
             height: 0.0,
             peak: 0.0,
-            gravity: 0.0,
-            fft_data: Vec::new(),
+            gravity: 0.2,
         }
     }
-}
+} */
 
 fn hamming_window(n: usize) -> Vec<f32> {
     (0..n)
@@ -115,47 +116,58 @@ fn draw_oscilloscope(
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
     let fft: Vec<i32> = fft.iter().step_by(11).map(|&sample| ((sample as i32 / 8) - 9)).collect(); // cast to i32
 
-    let mut bars: Vec<Bar> = vec![Bar::new(); NUM_BARS];
-
-    let mut peak1: f64 = 0.0;
+    //let mut bars: Vec<Bar> = vec![Bar::new(); NUM_BARS];
 
     // Process your FFT data and store it in the respective Bar instances
-
+/* unsafe {
     // Iterate over all bars to process FFT data and update peaks.
-    for (bar, fft_chunk) in bars.iter_mut().zip(fft.chunks(fft.len() / NUM_BARS)) {
-        bar.fft_data = fft_chunk.to_vec();
+    for (bar, &fft_value) in bars.iter_mut().zip(fft.iter()) {
+        // Access the values from bars and fft here, which are represented by (bar, fft_value).
+        // You can use 'bar' and 'fft_value' as needed in this section of the loop.
+    
+        // For example, if you want to update 'bar.height' based on 'fft_value':
+        bar.height = fft_value as f64 + 9.0;
+    
+        // Or if you want to modify 'fft_value' and update 'bar.height':
+        // fft_value = some_modification(fft_value);
+        // bar.height = fft_value;
 
-        // Calculate the level1 (you need to define how to calculate this based on your FFT data).
-        // For example, let's assume it's the average value of the FFT data.
-        let level1: f64 = fft_chunk.iter().map(|&x| x as f64).sum::<f64>() / fft_chunk.len() as f64 + 9.0;
-
-        bar.height = level1;
-
-        // Update the peak based on the comparison with level1.
-        if level1 <= bar.peak {
-            bar.peak = level1;
+        //println!("{}", bar.height+9.0);
+        /*if bar.height > bar.peak {
+            bar.peak = bar.height;
         } else {
-            // Calculate the amount to decrease the peak based on the decay rate.
-
-            // Ensure 'bar.peak' does not go below a certain minimum value (e.g., 0.0).
-            bar.peak += 1.0;
+            bar.peak -= 0.001;
+        } if bar.peak >= 15.0{
+            bar.peak = 15.0;
+        } if bar.peak < 1.0 {
+            bar.peak = -1.0;
         }
-        //println!("level1: {:?}, bar.peak: {:?}", level1, bar.peak);
+        //bar.peak = PEAK1;
+        if mode == 0 {
+            //println!("{}", bar.peak);
+        }*/
     }
+} */
+/* let mut bins: usize = 0;
+    while bins < 75{
+    // Decrease bars[bins].peak by 3.0
 
-    // Extract FFT data for a specific bar (e.g., the first one) after the loop
-    //let first_bar_fft_data = &bars[0].peak;
+    // Ensure bars[bins].peak doesn't go below a certain minimum value (e.g., 0.0)
+        if bars[bins].height >= bars[bins].peak {
+            //bars[bins].peak = bars[bins].height;
+            bars[bins].peak = bars[bins].height;
+        } if bars[bins].peak >= 15.0{
+            bars[bins].peak = 15.0;
+        } if bars[bins].peak < 1.0 {
+            bars[bins].peak = -1.0;
+        } else {
+            //bars[bins].peak -= 0.2;
+        }
+        //bars[bins].height = bars[bins].peak;
 
-    // Now you can use the first_bar_fft_data variable without issues
-    //println!("{:?}", &bars[0].peak);
-
-/*     if &bars[0].height >= &peak1 {
-        peak1 = bars[0].height;
-    } else {
-        peak1 -= DECAY_RATE;
-    } 
-
-    println!("{peak1}"); */
+        println!("{:?}", bars[bins].peak);
+        bins += 1;
+    } */
 
     let mut last_y = 0;
     let mut top: i32 = 0; //bro it is being read though wth?!
@@ -174,22 +186,25 @@ fn draw_oscilloscope(
             }
         }
     }
+/* if mode == 0 {
+    unsafe {
+        for (index, bar) in bars.iter_mut().enumerate() {
+            // Perform your peak update logic (similar to what you've described earlier)
+            // For demonstration purposes, we'll just set peak1 to a random value.
+            //bar.peak = rand::random::<f64>() * 100.0;
 
-/*     for (index, bar) in bars.iter_mut().enumerate() {
-        // Perform your peak update logic (similar to what you've described earlier)
-        // For demonstration purposes, we'll just set peak1 to a random value.
-        //bar.peak = rand::random::<f64>() * 100.0;
+            // Calculate the bar's position and height based on peak
+            let bar_x = (index as i32 * (WINDOW_WIDTH / NUM_BARS as i32)) as i32;
+            let bar_height = (bar.peak) as i32;
 
-        // Calculate the bar's position and height based on peak
-        let bar_x = (index as i32 * (WINDOW_WIDTH / NUM_BARS as i32)) as i32;
-        //let bar_height = (bar.peak) as i32 * zoom;
-
-        // Create and draw the bar as a rectangle
-        let rect = Rect::new(bar_x * zoom, peak1 as i32, zoom as u32, zoom as u32);
-        canvas.set_draw_color(Color::RGB(255, 0, 0)); // Set your desired color
-        canvas.fill_rect(rect).unwrap();
-    } */
-
+            // Create and draw the bar as a rectangle
+            let rect = Rect::new(bar_x * zoom, (-bar_height as i32 +15) * zoom as i32, zoom as u32, zoom as u32);
+            canvas.set_draw_color(_colors[23]); // Set your desired color
+            canvas.fill_rect(rect).unwrap();
+        }
+    }
+}
+*/
     if mode == 1{
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
@@ -390,7 +405,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         let windowed_mixed_fft: Vec<f32> = mixed_fft
             .iter()
             .zip(window.iter())
-            .map(|(&sample, &window_sample)| sample * window_sample / 6.0)
+            .map(|(&sample, &window_sample)| sample * window_sample / 12.0)
             .collect();
 
         // Convert mixed to a [f32; 16] array
