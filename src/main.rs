@@ -60,8 +60,10 @@ struct Args {
 #[derive(Clone)]
 struct Bar {
     height: f64,
+    height2: f64,
     peak: f64,
     gravity: f64,
+    bargrav: f64
 }
 
 fn hamming_window(n: usize) -> Vec<f32> {
@@ -108,6 +110,7 @@ fn draw_oscilloscope(
     let mut last_y = 0;
     let mut top: i32 = 0; //bro it is being read though wth?!
     let mut bottom: i32 = 0;
+    let fft_value: f64 = 0.0;
 
     // Process your FFT data and store it in the respective Bar instances
     for (bar, &fft_value) in bars.iter_mut().zip(fft.iter()) {
@@ -202,7 +205,7 @@ if mode == 0 {
     } else if mode == 0{
         for (i, bar) in bars.iter().enumerate() {
             let x = i as i32 * zoom as i32;
-            let y = -bar.height as i32 + 15;
+            let y = -bar.height2 as i32 + 15;
 
             top = y; //come on now :|
             bottom = 16;
@@ -238,15 +241,17 @@ if mode == 0 {
         }
         for (i, bar) in bars.iter().enumerate() {
             let bar_x = i as i32 * zoom as i32;
-            let mut bar_height = -bar.peak as i32 + 15;
-            if bar_height > 14 {
-                bar_height = 16;
-            }
+            let bar_height = -bar.peak + 15.0;
+            let mut peaki32: i32 = bar_height as i32;
 	    //let bar_height2 = -bar.height as i32 + 15;
         //println!("{}", bar_height);
 
+        if peaki32 > 14 {
+            peaki32 = 18;
+        }
+
             let rect = Rect::new(
-                bar_x, bar_height * zoom as i32,
+                bar_x, peaki32 * zoom as i32,
                 zoom as u32,
                 zoom as u32,
             );
@@ -254,8 +259,21 @@ if mode == 0 {
             canvas.fill_rect(rect).unwrap();
 	}
         for i in 0..NUM_BARS {
-            // Decrease Peak based on Gravity
-            bars[i].peak -= bars[i].gravity*1.5;
+            if bars[i].height2 > bars[i].peak {
+                bars[i].gravity = 0.0;
+                bars[i].peak = bars[i].height2;
+                
+            } else {
+                if bars[i].gravity <= 2.0 {
+                    bars[i].gravity += 0.007;
+                }
+                bars[i].peak = if bars[i].peak <= 0.0 {
+                    0.0
+                } else {
+                    bars[i].peak - bars[i].gravity
+                };
+            } 
+            bars[i].height2 -= bars[i].bargrav*6.0;
             // Print the values
             /*println!(
                 "Bar {} - Height: {}, Peak: {}, Gravity: {}",
@@ -265,8 +283,8 @@ if mode == 0 {
                 bars[i].gravity
             );*/
 
-            if bars[i].peak <= bars[i].height {
-                bars[i].peak = bars[i].height;
+            if bars[i].height2 <= bars[i].height {
+                bars[i].height2 = bars[i].height;
             }
         }
     } else if mode == 2{
@@ -464,8 +482,10 @@ fn main() -> Result<(), anyhow::Error> {
 
     let mut bars = [Bar {
         height: 0.0,
+        height2: 0.0,
         peak: 0.0,
         gravity: 0.2,
+        bargrav: 0.2,
     }; NUM_BARS];
 
     // Start the audio stream loop in a separate thread.
