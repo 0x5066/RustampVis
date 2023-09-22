@@ -54,6 +54,9 @@ struct Args {
     /// Specify the visualization mode to use
     #[arg(short, long, default_value = "0")]
     mode: u8,
+
+    #[arg(short, long, default_value = "thick")]
+    bandwidth: String,
 }
 
 #[derive(Copy)]
@@ -90,6 +93,30 @@ fn switch_specstyle(specdraw: &mut &str) {
     }
 }
 
+fn resize_vector_with_interpolation(original_vector: Vec<f64>, new_size: usize) -> Vec<f64> {
+    let original_size = original_vector.len();
+    let mut resized_vector = Vec::with_capacity(new_size);
+
+    for i in 0..new_size {
+        let index = i as f64 * (original_size - 1) as f64 / (new_size - 1) as f64;
+        let lower_index = index.floor() as usize;
+        let upper_index = index.ceil() as usize;
+
+        if lower_index == upper_index {
+            // Exact match, no interpolation needed
+            resized_vector.push(original_vector[lower_index]);
+        } else {
+            // Interpolation between two values
+            let t = index - lower_index as f64;
+            let interpolated_value =
+                (1.0 - t) * original_vector[lower_index] + t * original_vector[upper_index];
+            resized_vector.push(interpolated_value);
+        }
+    }
+
+    resized_vector
+}
+
 fn draw_oscilloscope(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
@@ -99,31 +126,64 @@ fn draw_oscilloscope(
     oscstyle: &str,
     specdraw: &str,
     mode: u8,
+    bandwidth: &String,
     zoom: i32,
     bars: &mut [Bar],
 ) {
+    let new_size = 150;
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
-    let fft: Vec<i32> = fft.iter().step_by(11).map(|&sample| ((sample as i32 / 8) - 9)).collect(); // cast to i32
+    let fft: Vec<f64> = fft.iter()
+    .map(|&sample| ((sample as i32 / 8) - 9) as f64)
+    .collect(); // cast to i32
+    let resized_vector = resize_vector_with_interpolation(fft.clone(), new_size);
+    //let length = fft.len();
+
+    //println!("The length of the vector is: {}", length);
+
 
     //let mut bars: Vec<Bar> = vec![Bar::new(); NUM_BARS];
     let mut last_y = 0;
     let mut top: i32 = 0; //bro it is being read though wth?!
     let mut bottom: i32 = 0;
-    let fft_value: f64 = 0.0;
-
-    // Process your FFT data and store it in the respective Bar instances
-    for (bar, &fft_value) in bars.iter_mut().zip(fft.iter()) {
-        // Access the values from bars and fft here, which are represented by (bar, fft_value).
-        // You can use 'bar' and 'fft_value' as needed in this section of the loop.
-    
-        // For example, if you want to update 'bar.height' based on 'fft_value':
-        bar.height = fft_value as f64 + 9.0;
-        if bar.height >= 15.0{
-            bar.height = 15.0;
+    //let fft_value: f64 = 0.0;
+    let mut fft_iter = resized_vector.iter();
+    if bandwidth == "thick"{
+        for bars_chunk in bars.chunks_mut(4) {
+            let mut sum = 0.0;
+        
+            for _ in 0..4 {
+                if let Some(fft_value) = fft_iter.next() {
+                    sum += *fft_value as f64 + 9.0;
+                    //println!("{sum}");
+                } else {
+                    // Handle the case where there are not enough elements in the `fft_iter`.
+                    break; // Exit the loop if we can't proceed further
+                }
+            }
+        
+            for bar in bars_chunk.iter_mut().take(3) {
+                bar.height = sum / 4.0;
+                if bar.height >= 15.0 {
+                    bar.height = 15.0;
+                }
+            }
         }
-    
+        
+    } else {
+        for (bar, &fft_value) in bars.iter_mut().zip(resized_vector.iter()) {
+            // Access the values from bars and fft here, which are represented by (bar, fft_value).
+            // You can use 'bar' and 'fft_value' as needed in this section of the loop.
+        
+            // For example, if you want to update 'bar.height' based on 'fft_value':
+            bar.height = fft_value as f64 + 9.0;
+            if bar.height >= 15.0{
+                bar.height = 15.0;
+            }
+        
+        }
     }
+
         // Draw the bars
 
     for x in 0..WINDOW_WIDTH {
@@ -241,7 +301,7 @@ if mode == 0 {
         }
         for (i, bar) in bars.iter().enumerate() {
             let bar_x = i as i32 * zoom as i32;
-            let bar_height = -bar.peak + 15.0;
+            let bar_height = -bar.peak + 15.98999;
             let mut peaki32: i32 = bar_height as i32;
 	    //let bar_height2 = -bar.height as i32 + 15;
         //println!("{}", bar_height);
@@ -259,21 +319,7 @@ if mode == 0 {
             canvas.fill_rect(rect).unwrap();
 	}
         for i in 0..NUM_BARS {
-            if bars[i].height2 > bars[i].peak {
-                bars[i].gravity = 0.0;
-                bars[i].peak = bars[i].height2;
-                
-            } else {
-                if bars[i].gravity <= 2.0 {
-                    bars[i].gravity += 0.007;
-                }
-                bars[i].peak = if bars[i].peak <= 0.0 {
-                    0.0
-                } else {
-                    bars[i].peak - bars[i].gravity
-                };
-            } 
-            bars[i].height2 -= bars[i].bargrav*6.0;
+            bars[i].height2 -= bars[i].bargrav;
             // Print the values
             /*println!(
                 "Bar {} - Height: {}, Peak: {}, Gravity: {}",
@@ -286,6 +332,20 @@ if mode == 0 {
             if bars[i].height2 <= bars[i].height {
                 bars[i].height2 = bars[i].height;
             }
+            if bars[i].height2 > bars[i].peak {
+                bars[i].gravity = 0.0;
+                bars[i].peak = bars[i].height2;
+                
+            } else {
+                if bars[i].gravity <= 16.0 {
+                    bars[i].gravity += 0.006;
+                }
+                bars[i].peak = if bars[i].peak <= 0.0 {
+                    0.0
+                } else {
+                    bars[i].peak - bars[i].gravity
+                };
+            } 
         }
     } else if mode == 2{
     }
@@ -399,7 +459,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         let spectrum = microfft::real::rfft_4096(&mut mixed_f32);
         // since the real-valued coefficient at the Nyquist frequency is packed into the
         // imaginary part of the DC bin, it must be cleared before computing the amplitudes
-        spectrum[0].im = 0.0;
+        //spectrum[0].im = 0.0;
 
         let amplitudes: Vec<_> = spectrum.iter().map(|c| c.l1_norm() as u8).collect();
         //println!("{amplitudes:?}");
@@ -467,6 +527,7 @@ fn main() -> Result<(), anyhow::Error> {
     let mut viscolors = viscolors::load_colors(&args.viscolor);
     let mut osc_colors = osc_colors_and_peak(&viscolors);
     let mut mode = args.mode;
+    let bandwidth = args.bandwidth;
 
     let mut canvas = window.into_canvas().build().unwrap();
 
@@ -484,8 +545,8 @@ fn main() -> Result<(), anyhow::Error> {
         height: 0.0,
         height2: 0.0,
         peak: 0.0,
-        gravity: 0.2,
-        bargrav: 0.2,
+        gravity: 0.0,
+        bargrav: 1.5,
     }; NUM_BARS];
 
     // Start the audio stream loop in a separate thread.
@@ -532,7 +593,7 @@ fn main() -> Result<(), anyhow::Error> {
         *spec_data = spec_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, zoom, &mut bars/* , modern*/);
+        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars/* , modern*/);
 
         canvas.present();
 
