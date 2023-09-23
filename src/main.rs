@@ -13,7 +13,6 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use anyhow;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::thread;
-//use std::env;
 use clap::Parser;
 use std::collections::VecDeque;
 
@@ -93,31 +92,7 @@ fn switch_specstyle(specdraw: &mut &str) {
     }
 }
 
-fn resize_vector_with_interpolation(original_vector: Vec<f64>, new_size: usize) -> Vec<f64> {
-    let original_size = original_vector.len();
-    let mut resized_vector = Vec::with_capacity(new_size);
-
-    for i in 0..new_size {
-        let index = i as f64 * (original_size - 1) as f64 / (new_size - 1) as f64;
-        let lower_index = index.floor() as usize;
-        let upper_index = index.ceil() as usize;
-
-        if lower_index == upper_index {
-            // Exact match, no interpolation needed
-            resized_vector.push(original_vector[lower_index]);
-        } else {
-            // Interpolation between two values
-            let t = index - lower_index as f64;
-            let interpolated_value =
-                (1.0 - t) * original_vector[lower_index] + t * original_vector[upper_index];
-            resized_vector.push(interpolated_value);
-        }
-    }
-
-    resized_vector
-}
-
-fn draw_oscilloscope(
+fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     osc_colors: &[Color],
@@ -130,40 +105,33 @@ fn draw_oscilloscope(
     zoom: i32,
     bars: &mut [Bar],
 ) {
-    let new_size = 150;
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
     let fft: Vec<f64> = fft.iter()
     .map(|&sample| ((sample as i32 / 8) - 9) as f64)
     .collect(); // cast to i32
-    let resized_vector = resize_vector_with_interpolation(fft.clone(), new_size);
-    //let length = fft.len();
 
-    //println!("The length of the vector is: {}", length);
-
-
-    //let mut bars: Vec<Bar> = vec![Bar::new(); NUM_BARS];
     let mut last_y = 0;
     let mut top: i32 = 0; //bro it is being read though wth?!
     let mut bottom: i32 = 0;
-    //let fft_value: f64 = 0.0;
-    let mut fft_iter = resized_vector.iter();
+
+    let mut fft_iter = fft.iter();
+
     if bandwidth == "thick"{
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
         
-            for _ in 0..4 {
+            for _ in 0..46 {
                 if let Some(fft_value) = fft_iter.next() {
                     sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
                 } else {
-                    // Handle the case where there are not enough elements in the `fft_iter`.
-                    break; // Exit the loop if we can't proceed further
+                    break;
                 }
             }
         
             for bar in bars_chunk.iter_mut().take(3) {
-                bar.height = sum / 4.0;
+                bar.height = sum / 46.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -171,20 +139,26 @@ fn draw_oscilloscope(
         }
         
     } else {
-        for (bar, &fft_value) in bars.iter_mut().zip(resized_vector.iter()) {
-            // Access the values from bars and fft here, which are represented by (bar, fft_value).
-            // You can use 'bar' and 'fft_value' as needed in this section of the loop.
+        for bars_chunk in bars.chunks_mut(1) {
+            let mut sum = 0.0;
         
-            // For example, if you want to update 'bar.height' based on 'fft_value':
-            bar.height = fft_value as f64 + 9.0;
-            if bar.height >= 15.0{
-                bar.height = 15.0;
+            for _ in 0..11 {
+                if let Some(fft_value) = fft_iter.next() {
+                    sum += *fft_value as f64 + 9.0;
+                    //println!("{sum}");
+                } else {
+                    break;
+                }
             }
         
+            for bar in bars_chunk.iter_mut() {
+                bar.height = sum / 11.0;
+                if bar.height >= 15.0 {
+                    bar.height = 15.0;
+                }
+            }
         }
     }
-
-        // Draw the bars
 
     for x in 0..WINDOW_WIDTH {
         for y in 0..WINDOW_HEIGHT {
@@ -199,9 +173,6 @@ fn draw_oscilloscope(
             }
         }
     }
-if mode == 0 {
-
-}
     if mode == 1{
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
@@ -257,8 +228,6 @@ if mode == 0 {
                 }
             } else {
                 eprintln!("Invalid oscilloscope style. Supported styles: lines, solid, dots.");
-                // You can handle this error case according to your needs
-                // ...
             }
         }
 
@@ -303,8 +272,6 @@ if mode == 0 {
             let bar_x = i as i32 * zoom as i32;
             let bar_height = -bar.peak + 15.98999;
             let mut peaki32: i32 = bar_height as i32;
-	    //let bar_height2 = -bar.height as i32 + 15;
-        //println!("{}", bar_height);
 
         if peaki32 > 14 {
             peaki32 = 18;
@@ -320,7 +287,6 @@ if mode == 0 {
 	}
         for i in 0..NUM_BARS {
             bars[i].height2 -= bars[i].bargrav;
-            // Print the values
             /*println!(
                 "Bar {} - Height: {}, Peak: {}, Gravity: {}",
                 i + 1,
@@ -593,7 +559,7 @@ fn main() -> Result<(), anyhow::Error> {
         *spec_data = spec_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_oscilloscope(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars/* , modern*/);
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars/* , modern*/);
 
         canvas.present();
 
