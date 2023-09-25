@@ -13,3 +13,4 @@ crossbeam-channel = "0.5.8"
 clap = { version = "4.3.19", features = ["derive"] }
 # audioviz = { version = "*"}
 microfft = "0.5.1"
+num = "0.4.1"

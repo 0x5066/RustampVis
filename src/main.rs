@@ -15,15 +15,15 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::thread;
 use clap::Parser;
 use std::collections::VecDeque;
+use num::Complex;
 
 mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
 const NUM_BARS: usize = 75;
-//static mut BINS: usize = 0;
 
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Oscilloscope style
@@ -54,8 +54,13 @@ struct Args {
     #[arg(short, long, default_value = "0")]
     mode: u8,
 
+    /// Bandwidth of the Analyzer
     #[arg(short, long, default_value = "thick")]
     bandwidth: String,
+
+    /* /// Modern Skin style visualization
+    #[arg(short, long, default_value = "0")]
+    modern: bool,*/ 
 }
 
 #[derive(Copy)]
@@ -72,6 +77,38 @@ fn hamming_window(n: usize) -> Vec<f32> {
     (0..n)
         .map(|i| 0.54 - 0.46 * f32::cos(2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32))
         .collect()
+}
+
+// Define your A-weighting values and frequency values here
+const A_WEIGHTING: [f32; 29] = [
+    // 20   25    31,5     40    50    63     80    100  125  160  200  250  315  400
+    -12.0, -12.0, -12.0, -12.0, -8.0, -7.0, -6.0, -5.0, -4.0, -2.0, 1.0, 2.5, 3.0, 4.5,
+    //500 630 800  1000 1250 1600 2000 2500 3150  4000  5000  6300  8000  10000 16000
+    6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0
+];
+
+const F_VALUES: [f32; 29] = [
+    20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 315.0,
+    400.0, 500.0, 630.0, 800.0, 1000.0, 1250.0, 1600.0, 2000.0, 2500.0, 3150.0, 4000.0,
+    5000.0, 6300.0, 8000.0, 10000.0, 16000.0,
+];
+
+fn apply_weighting(spectrum: &mut [Complex<f32>], frequencies: &[f32]) {
+    //let mut weights = vec![1.0; spectrum.len()];
+
+    for (i, &spectrum_freq) in frequencies.iter().enumerate() {
+        let closest_index = F_VALUES
+            .iter()
+            .map(|&f| (spectrum_freq - f).abs())
+            .enumerate()
+            .min_by(|&(_, a), &(_, b)| a.partial_cmp(&b).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+
+        // Apply the weight to the spectrum value at the closest_index
+        let weight = 10.0_f32.powf(A_WEIGHTING[closest_index] / 20.0);
+        spectrum[i] = spectrum[i] * Complex::new(weight, 0.0); // Apply the weight
+    }
 }
 
 fn switch_oscstyle(oscstyle: &mut &str) {
@@ -121,7 +158,7 @@ fn draw_visualizer(
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
         
-            for _ in 0..46 {
+            for _ in 0..23 {
                 if let Some(fft_value) = fft_iter.next() {
                     sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
@@ -131,7 +168,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut().take(3) {
-                bar.height = sum / 46.0;
+                bar.height = sum / 23.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -142,9 +179,9 @@ fn draw_visualizer(
         for bars_chunk in bars.chunks_mut(1) {
             let mut sum = 0.0;
         
-            for _ in 0..11 {
+            for _ in 0..6 {
                 if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 9.0;
+                    sum += *fft_value as f64 + 6.0;
                     //println!("{sum}");
                 } else {
                     break;
@@ -152,7 +189,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut() {
-                bar.height = sum / 11.0;
+                bar.height = sum / 5.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -394,7 +431,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         let mixed_fft: Vec<f32> = left
             .iter()
             .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 2.0)))
+            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 4.0)))
             .collect();
 
         // Extend the ring buffer with the new samples
@@ -415,18 +452,66 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
             .collect();
 
         // Convert mixed to a [f32; 16] array
-        let mut mixed_f32: [f32; 4096] = [0.0; 4096];
-        for (i, &sample) in windowed_mixed_fft.iter().enumerate() {
+        let mut mixed_f32: [f32; 2048] = [0.0; 2048];
+        for (i, &sample) in windowed_mixed_fft.iter().enumerate().take(2048) {
             mixed_f32[i] = sample as f32;
         }
-
+        
         // compute the RFFT of the samples
         //let mut mixed_f32: [f32; 2048] = mixed.try_into().unwrap();
-        let spectrum = microfft::real::rfft_4096(&mut mixed_f32);
+        let spectrum = microfft::real::rfft_2048(&mut mixed_f32);
+        //println!("{}", spectrum.len());
         // since the real-valued coefficient at the Nyquist frequency is packed into the
         // imaginary part of the DC bin, it must be cleared before computing the amplitudes
         //spectrum[0].im = 0.0;
 
+        let frequencies: Vec<f32> = (0..spectrum.len())
+        .map(|i| i as f32 * 44100.0 / (2.0 * spectrum.len() as f32))
+        .collect();
+        // hard coding 44100 is a bad idea because windows setups can and will differ
+        // does cpal return the samplerate?
+
+        // Apply the weighting function
+        apply_weighting(spectrum, &frequencies);
+
+        // figure out linear interpolation
+        /* let num_log_bins = 660; // Adjust this value as needed
+
+        // Calculate the scaling factor for the logarithmic mapping
+        let min_freq: f64 = 6.0; // Minimum frequency in Hz (adjust as needed)
+        let max_freq: f64 = 20000.0; // Maximum frequency in Hz (adjust as needed)
+        let log_min = min_freq.log2();
+        let log_max = max_freq.log2();
+        let log_bin_width = (log_max - log_min) / num_log_bins as f64;
+
+        // Initialize a vector to store the logarithmic spectrum
+        let mut log_spectrum = vec![0.0; num_log_bins];
+
+        // Populate the logarithmic spectrum by mapping the bins logarithmically
+        for i in 0..num_log_bins {
+            // Calculate the frequency range for the current bin
+            let bin_min = min_freq * 2.0_f64.powf(log_bin_width * i as f64 + log_min);
+            let bin_max = min_freq * 2.0_f64.powf(log_bin_width * (i + 1) as f64 + log_min);
+
+            // Find the indices corresponding to the frequency range
+            let start_index = (bin_min * (spectrum.len() as f64 / max_freq)) as usize;
+            let end_index = (bin_max * (spectrum.len() as f64 / max_freq)) as usize;
+
+            // Ensure the indices are within bounds
+            let start_index = start_index.min(spectrum.len());
+            let end_index = end_index.min(spectrum.len());
+
+            // Calculate the average magnitude within the frequency range
+            let bin_average = spectrum[start_index..end_index]
+                .iter()
+                .map(|&complex| complex.l1_norm())
+                .sum::<f32>()
+                / (end_index - start_index) as f32;
+
+            log_spectrum[i] = bin_average;
+        }  */
+
+        // Convert the spectrum to amplitudes
         let amplitudes: Vec<_> = spectrum.iter().map(|c| c.l1_norm() as u8).collect();
         //println!("{amplitudes:?}");
         //assert_eq!(&amplitudes, &[0, 0, 0, 8, 0, 0, 0, 0]);
@@ -512,7 +597,7 @@ fn main() -> Result<(), anyhow::Error> {
         height2: 0.0,
         peak: 0.0,
         gravity: 0.0,
-        bargrav: 1.5,
+        bargrav: 2.0,
     }; NUM_BARS];
 
     // Start the audio stream loop in a separate thread.
