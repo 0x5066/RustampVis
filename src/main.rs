@@ -60,7 +60,15 @@ struct Args {
 
     /* /// Modern Skin style visualization
     #[arg(short, long, default_value = "0")]
-    modern: bool,*/ 
+    modern: bool,*/
+
+    /// Set peak fall off, ranging from 1 - 5
+    #[arg(long, default_value = "3")]
+    peakfo: u8,
+
+    /// Set analyzer fall off, ranging from 1 - 5
+    #[arg(long, default_value = "2")]
+    barfo: u8,
 }
 
 #[derive(Copy)]
@@ -129,6 +137,14 @@ fn switch_specstyle(specdraw: &mut &str) {
     }
 }
 
+fn switch_bandwidth(bandwidth: &mut &str){
+    match *bandwidth {
+        "thick" => *bandwidth = "thin",
+        "thin" => *bandwidth = "thick",
+        _ => println!("Invalid bandwidth. Supported bandwidths: thick, thin."),
+    }
+}
+
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
@@ -138,9 +154,10 @@ fn draw_visualizer(
     oscstyle: &str,
     specdraw: &str,
     mode: u8,
-    bandwidth: &String,
+    bandwidth: &str,
     zoom: i32,
     bars: &mut [Bar],
+    peakfo: u8,
 ) {
     let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
@@ -154,6 +171,7 @@ fn draw_visualizer(
 
     let mut fft_iter = fft.iter();
 
+    // analyzer stuff
     if bandwidth == "thick"{
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
@@ -167,7 +185,7 @@ fn draw_visualizer(
                 }
             }
         
-            for bar in bars_chunk.iter_mut().take(3) {
+            for bar in bars_chunk.iter_mut().take(4) {
                 bar.height = sum / 23.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
@@ -181,7 +199,7 @@ fn draw_visualizer(
         
             for _ in 0..6 {
                 if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 6.0;
+                    sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
                 } else {
                     break;
@@ -189,12 +207,41 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut() {
-                bar.height = sum / 5.0;
+                bar.height = sum / 6.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
             }
         }
+    }
+
+    for i in 0..NUM_BARS {
+        bars[i].height2 -= bars[i].bargrav;
+        /*println!(
+            "Bar {} - Height: {}, Peak: {}, Gravity: {}",
+            i + 1,
+            bars[i].height,
+            bars[i].peak,
+            bars[i].gravity
+        );*/
+
+        if bars[i].height2 <= bars[i].height {
+            bars[i].height2 = bars[i].height;
+        }
+        if bars[i].height2 > bars[i].peak {
+            bars[i].gravity = 0.0;
+            bars[i].peak = bars[i].height2;
+            
+        } else {
+            if bars[i].gravity <= 16.0 {
+                bars[i].gravity += (1.0 / 512.0) * (peakfo as f64);
+            }
+            bars[i].peak = if bars[i].peak <= 0.0 {
+                0.0
+            } else {
+                bars[i].peak - bars[i].gravity
+            };
+        } 
     }
 
     for x in 0..WINDOW_WIDTH {
@@ -289,7 +336,7 @@ fn draw_visualizer(
                 if specdraw == "normal"{
                     color_index = (dy as usize + 2) % _colors.len();
                 } else if specdraw == "fire" {
-                    color_index = (dy as usize - y as usize + 2) % _colors.len();
+                    color_index = (dy as usize).wrapping_sub(y as usize).wrapping_add(2) % _colors.len();
                 } else if specdraw == "line" {
                     if y == -1 {
                         color_index = 2;
@@ -322,36 +369,24 @@ fn draw_visualizer(
             canvas.set_draw_color(_colors[23]);
             canvas.fill_rect(rect).unwrap();
 	}
-        for i in 0..NUM_BARS {
-            bars[i].height2 -= bars[i].bargrav;
-            /*println!(
-                "Bar {} - Height: {}, Peak: {}, Gravity: {}",
-                i + 1,
-                bars[i].height,
-                bars[i].peak,
-                bars[i].gravity
-            );*/
+        // Define the spacing between vertical lines (every 4th place).
+        let line_spacing = 4;
 
-            if bars[i].height2 <= bars[i].height {
-                bars[i].height2 = bars[i].height;
+        if bandwidth == "thick" {
+            // Loop to draw the vertical lines.
+            for bar_x in (0..75).step_by(line_spacing) {
+                let rect = Rect::new(
+                    (bar_x - 1) * zoom,
+                    0, // Adjust this if you want the lines to start from a different Y coordinate.
+                    1 * zoom as u32,  // Set the width of the line (1 pixel for vertical line).
+                    16 * zoom as u32, // Set the height of the line (16 pixels high).
+                );
+                canvas.set_draw_color(_colors[0]);
+                canvas.fill_rect(rect).unwrap();
             }
-            if bars[i].height2 > bars[i].peak {
-                bars[i].gravity = 0.0;
-                bars[i].peak = bars[i].height2;
-                
-            } else {
-                if bars[i].gravity <= 16.0 {
-                    bars[i].gravity += 0.006;
-                }
-                bars[i].peak = if bars[i].peak <= 0.0 {
-                    0.0
-                } else {
-                    bars[i].peak - bars[i].gravity
-                };
-            } 
-        }
+        }  
     } else if mode == 2{
-    }
+    }  
 }
 
 fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_index: Option<usize>, amp: f32) {
@@ -578,7 +613,21 @@ fn main() -> Result<(), anyhow::Error> {
     let mut viscolors = viscolors::load_colors(&args.viscolor);
     let mut osc_colors = osc_colors_and_peak(&viscolors);
     let mut mode = args.mode;
-    let bandwidth = args.bandwidth;
+    let mut bandwidth = args.bandwidth.as_str();
+    let mut peakfo = args.peakfo;
+    let mut barfo = args.barfo;
+
+    if args.peakfo <= 1 {
+        peakfo = 1;
+    } else if args.peakfo >= 5 {
+        peakfo = 5;
+    }
+
+    if args.barfo <= 1 {
+        barfo = 1;
+    } else if args.barfo >= 5 {
+        barfo = 5;
+    }
 
     let mut canvas = window.into_canvas().build().unwrap();
 
@@ -597,7 +646,7 @@ fn main() -> Result<(), anyhow::Error> {
         height2: 0.0,
         peak: 0.0,
         gravity: 0.0,
-        bargrav: 2.0,
+        bargrav: barfo as f64 / 3.0,
     }; NUM_BARS];
 
     // Start the audio stream loop in a separate thread.
@@ -613,6 +662,14 @@ fn main() -> Result<(), anyhow::Error> {
                     let new_osc_colors = osc_colors_and_peak(&new_viscolors);
                     viscolors = new_viscolors;
                     osc_colors = new_osc_colors;
+                }
+                Event::KeyDown { keycode: Some(Keycode::B), .. } => {
+                    // switch bandwidth
+                    if bandwidth == "thick"{
+                        switch_bandwidth(&mut bandwidth);
+                    } else if bandwidth == "thin" {
+                        switch_bandwidth(&mut bandwidth);
+                    }
                 }
                 Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
                     if mode == 1{
@@ -644,7 +701,8 @@ fn main() -> Result<(), anyhow::Error> {
         *spec_data = spec_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars/* , modern*/);
+        //println!("{}", sdl2::get_framerate());
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
 
         canvas.present();
 
