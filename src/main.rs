@@ -16,6 +16,7 @@ use std::thread;
 use clap::Parser;
 use std::collections::VecDeque;
 use num::Complex;
+use num::complex::ComplexFloat;
 
 mod viscolors;
 
@@ -90,9 +91,9 @@ fn hamming_window(n: usize) -> Vec<f32> {
 // Define your A-weighting values and frequency values here
 const A_WEIGHTING: [f32; 29] = [
     // 20   25    31,5     40    50    63     80    100  125  160  200  250  315  400
-    -12.0, -12.0, -12.0, -12.0, -8.0, -7.0, -6.0, -5.0, -4.0, -2.0, 1.0, 2.5, 3.0, 4.5,
+    -12.0, -12.0, -12.0, -12.0, -8.0, -7.0, -6.0, -5.0, -4.0, -2.0, 2.0, 4.5, 6.0, 8.5,
     //500 630 800  1000 1250 1600 2000 2500 3150  4000  5000  6300  8000  10000 16000
-    6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0
+    12.0, 12.5, 14.0, 14.5, 16.0, 16.5, 18.0, 18.5, 20.0, 22.5, 24.0, 24.5, 28.0, 28.5, 32.0
 ];
 
 const F_VALUES: [f32; 29] = [
@@ -145,6 +146,18 @@ fn switch_bandwidth(bandwidth: &mut &str){
     }
 }
 
+fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
+    // Ensure x0 is less than x1
+    let (x0, x1, y0, y1) = if x0 > x1 {
+        (x1, x0, y1, y0)
+    } else {
+        (x0, x1, y0, y1)
+    };
+
+    // Calculate the interpolated value
+    y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+}
+
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
@@ -176,7 +189,7 @@ fn draw_visualizer(
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
         
-            for _ in 0..23 {
+            for _ in 0..24 {
                 if let Some(fft_value) = fft_iter.next() {
                     sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
@@ -186,7 +199,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut().take(4) {
-                bar.height = sum / 23.0;
+                bar.height = sum / 25.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -207,7 +220,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut() {
-                bar.height = sum / 6.0;
+                bar.height = sum / 7.0;
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -466,7 +479,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         let mixed_fft: Vec<f32> = left
             .iter()
             .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 4.0)))
+            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 12.0)))
             .collect();
 
         // Extend the ring buffer with the new samples
@@ -510,11 +523,11 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         apply_weighting(spectrum, &frequencies);
 
         // figure out linear interpolation
-        /* let num_log_bins = 660; // Adjust this value as needed
+        let num_log_bins = 658; // Adjust this value as needed
 
         // Calculate the scaling factor for the logarithmic mapping
         let min_freq: f64 = 6.0; // Minimum frequency in Hz (adjust as needed)
-        let max_freq: f64 = 20000.0; // Maximum frequency in Hz (adjust as needed)
+        let max_freq: f64 = 22050.0; // Maximum frequency in Hz (adjust as needed)
         let log_min = min_freq.log2();
         let log_max = max_freq.log2();
         let log_bin_width = (log_max - log_min) / num_log_bins as f64;
@@ -522,32 +535,32 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         // Initialize a vector to store the logarithmic spectrum
         let mut log_spectrum = vec![0.0; num_log_bins];
 
-        // Populate the logarithmic spectrum by mapping the bins logarithmically
+        // Populate the logarithmic spectrum using linear interpolation
         for i in 0..num_log_bins {
-            // Calculate the frequency range for the current bin
-            let bin_min = min_freq * 2.0_f64.powf(log_bin_width * i as f64 + log_min);
-            let bin_max = min_freq * 2.0_f64.powf(log_bin_width * (i + 1) as f64 + log_min);
-
-            // Find the indices corresponding to the frequency range
-            let start_index = (bin_min * (spectrum.len() as f64 / max_freq)) as usize;
-            let end_index = (bin_max * (spectrum.len() as f64 / max_freq)) as usize;
-
+            // Calculate the center frequency of the current bin in logarithmic scale
+            let center_freq = min_freq * 2.0_f64.powf(log_bin_width * (i as f64 + 0.5) + log_min);
+    
+            // Find the two closest frequencies in the original spectrum
+            let lower_freq_index = (center_freq * (spectrum.len() as f64 / max_freq)) as usize;
+            let upper_freq_index = lower_freq_index + 1;
+    
             // Ensure the indices are within bounds
-            let start_index = start_index.min(spectrum.len());
-            let end_index = end_index.min(spectrum.len());
-
-            // Calculate the average magnitude within the frequency range
-            let bin_average = spectrum[start_index..end_index]
-                .iter()
-                .map(|&complex| complex.l1_norm())
-                .sum::<f32>()
-                / (end_index - start_index) as f32;
-
-            log_spectrum[i] = bin_average;
-        }  */
+            let lower_freq_index = lower_freq_index.min(spectrum.len() - 1);
+            let upper_freq_index = upper_freq_index.min(spectrum.len() - 1);
+    
+            // Linearly interpolate between the two closest frequencies
+            let lower_freq = frequencies[lower_freq_index];
+            let upper_freq = frequencies[upper_freq_index];
+    
+            let lower_value = spectrum[lower_freq_index].l1_norm();
+            let upper_value = spectrum[upper_freq_index].l1_norm();
+    
+            // Perform linear interpolation to estimate the value at the center frequency
+            log_spectrum[i] = linear_interpolation(center_freq, lower_freq.into(), upper_freq.into(), lower_value.into(), upper_value.into());
+        }
 
         // Convert the spectrum to amplitudes
-        let amplitudes: Vec<_> = spectrum.iter().map(|c| c.l1_norm() as u8).collect();
+        let amplitudes: Vec<_> = log_spectrum.iter().map(|c| c.l1_norm() as u8).collect();
         //println!("{amplitudes:?}");
         //assert_eq!(&amplitudes, &[0, 0, 0, 8, 0, 0, 0, 0]);
 
@@ -686,8 +699,8 @@ fn main() -> Result<(), anyhow::Error> {
             }
         }
 
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.clear();
+        // canvas.set_draw_color(Color::RGB(0, 0, 0));
+        // canvas.clear();
         // Lock the mutex and swap the captured audio samples with the visualization data.
         let audio_samples = rx.recv().unwrap();
         let spec_samples = r.recv().unwrap();
