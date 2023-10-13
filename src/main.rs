@@ -18,6 +18,8 @@ use std::collections::VecDeque;
 use num::Complex;
 use num::complex::ComplexFloat;
 
+use fltk::{app, button::Button, frame::Frame, prelude::*, window::Window};
+
 mod viscolors;
 
 const WINDOW_WIDTH: i32 = 75;
@@ -172,7 +174,7 @@ fn draw_visualizer(
     bars: &mut [Bar],
     peakfo: u8,
 ) {
-    let xs: Vec<i32> = (0..WINDOW_WIDTH).collect();
+    let xs: Vec<i32> = (0..75).collect();
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
     let fft: Vec<f64> = fft.iter()
     .map(|&sample| ((sample as i32 / 8) - 9) as f64)
@@ -189,7 +191,7 @@ fn draw_visualizer(
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
         
-            for _ in 0..24 {
+            for _ in 0..24*2 {
                 if let Some(fft_value) = fft_iter.next() {
                     sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
@@ -199,7 +201,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut().take(4) {
-                bar.height = sum / 25.0;
+                bar.height = sum / (25.0 * 2.0);
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -210,7 +212,7 @@ fn draw_visualizer(
         for bars_chunk in bars.chunks_mut(1) {
             let mut sum = 0.0;
         
-            for _ in 0..6 {
+            for _ in 0..6*2 {
                 if let Some(fft_value) = fft_iter.next() {
                     sum += *fft_value as f64 + 9.0;
                     //println!("{sum}");
@@ -220,7 +222,7 @@ fn draw_visualizer(
             }
         
             for bar in bars_chunk.iter_mut() {
-                bar.height = sum / 7.0;
+                bar.height = sum / (7.0 * 2.0);
                 if bar.height >= 15.0 {
                     bar.height = 15.0;
                 }
@@ -257,8 +259,8 @@ fn draw_visualizer(
         } 
     }
 
-    for x in 0..WINDOW_WIDTH {
-        for y in 0..WINDOW_HEIGHT {
+    for x in 0..75 {
+        for y in 0..16 {
             if x % 2 == 1 || y % 2 == 0 {
                 let rect = Rect::new(x * zoom, y * zoom, zoom as u32, zoom as u32);
                 canvas.set_draw_color(_colors[0]);
@@ -500,14 +502,14 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
             .collect();
 
         // Convert mixed to a [f32; 16] array
-        let mut mixed_f32: [f32; 2048] = [0.0; 2048];
-        for (i, &sample) in windowed_mixed_fft.iter().enumerate().take(2048) {
+        let mut mixed_f32: [f32; 4096] = [0.0; 4096];
+        for (i, &sample) in windowed_mixed_fft.iter().enumerate().take(4096) {
             mixed_f32[i] = sample as f32;
         }
         
         // compute the RFFT of the samples
-        //let mut mixed_f32: [f32; 2048] = mixed.try_into().unwrap();
-        let spectrum = microfft::real::rfft_2048(&mut mixed_f32);
+        //let mut mixed_f32: [f32; 4096] = mixed.try_into().unwrap();
+        let spectrum = microfft::real::rfft_4096(&mut mixed_f32);
         //println!("{}", spectrum.len());
         // since the real-valued coefficient at the Nyquist frequency is packed into the
         // imaginary part of the DC bin, it must be cleared before computing the amplitudes
@@ -523,7 +525,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         apply_weighting(spectrum, &frequencies);
 
         // figure out linear interpolation
-        let num_log_bins = 658; // Adjust this value as needed
+        let num_log_bins = 625*2; // Adjust this value as needed
 
         // Calculate the scaling factor for the logarithmic mapping
         let min_freq: f64 = 6.0; // Minimum frequency in Hz (adjust as needed)
@@ -586,6 +588,18 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 }
 
+fn fltk(){
+
+    let app = app::App::default();
+    let mut wind = Window::new(100, 100, 400, 300, "Hello from rust");
+    let mut frame = Frame::new(0, 0, 400, 200, "");
+    let mut but = Button::new(160, 210, 75, 23, "Click me!");
+    wind.end();
+    wind.show();
+    but.set_callback(move |_| frame.set_label("Hello World!")); // the closure capture is mutable borrow to our button
+    app.run().unwrap();
+
+}
 fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
@@ -607,24 +621,11 @@ fn main() -> Result<(), anyhow::Error> {
         }
     };
     
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-    //let args: Vec<String> = env::args().collect();
-
-    // Extract the oscstyle field from Args struct
+    // handle args
     let mut oscstyle = args.oscstyle.as_str(); // Convert String to &str
     let mut specdraw = args.specdraw.as_str();
     let zoom = args.zoom;
     let amp = args.amp;
-    let window = video_subsystem
-        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
-        .position_centered()
-        .build()
-        .unwrap();
-
-    // Load the custom viscolor.txt file
-    let mut viscolors = viscolors::load_colors(&args.viscolor);
-    let mut osc_colors = osc_colors_and_peak(&viscolors);
     let mut mode = args.mode;
     let mut bandwidth = args.bandwidth.as_str();
     let mut peakfo = args.peakfo;
@@ -642,9 +643,30 @@ fn main() -> Result<(), anyhow::Error> {
         barfo = 5;
     }
 
+    let mut bars = [Bar {
+        height: 0.0,
+        height2: 0.0,
+        peak: 0.0,
+        gravity: 0.0,
+        bargrav: barfo as f64 / 3.0,
+    }; NUM_BARS];
+
+    // set up sdl2
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+    let window = video_subsystem
+        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
+        .position_centered()
+        .build()
+        .unwrap();
     let mut canvas = window.into_canvas().build().unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
+
+    // Load the custom viscolor.txt file
+    let mut viscolors = viscolors::load_colors(&args.viscolor);
+    // extract relevant osc colors from the array
+    let mut osc_colors = osc_colors_and_peak(&viscolors);
 
     // The vector to store captured audio samples.
     let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -654,16 +676,9 @@ fn main() -> Result<(), anyhow::Error> {
     let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
     let (s, r): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
 
-    let mut bars = [Bar {
-        height: 0.0,
-        height2: 0.0,
-        peak: 0.0,
-        gravity: 0.0,
-        bargrav: barfo as f64 / 3.0,
-    }; NUM_BARS];
-
     // Start the audio stream loop in a separate thread.
     thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index), amp));
+    thread::spawn(move || fltk());
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -699,8 +714,6 @@ fn main() -> Result<(), anyhow::Error> {
             }
         }
 
-        // canvas.set_draw_color(Color::RGB(0, 0, 0));
-        // canvas.clear();
         // Lock the mutex and swap the captured audio samples with the visualization data.
         let audio_samples = rx.recv().unwrap();
         let spec_samples = r.recv().unwrap();
@@ -717,6 +730,7 @@ fn main() -> Result<(), anyhow::Error> {
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
 
+        // draw the cool shit
         canvas.present();
 
         std::thread::sleep(std::time::Duration::from_millis(0));
