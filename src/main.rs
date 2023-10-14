@@ -37,7 +37,7 @@ struct Args {
     #[arg(short, long, default_value = "normal")]
     specdraw: String, // Change this to String
 
-    /// Name of the custom viscolor.txt file
+    /// Name of the custom viscolor.txt file, supports images in the viscolor.txt format as well.
     #[arg(short, long, default_value = "viscolor.txt")]
     viscolor: String,
     
