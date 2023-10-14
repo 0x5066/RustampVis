@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use num::Complex;
 use num::complex::ComplexFloat;
 
-use fltk::{app, button::Button, frame::Frame, prelude::*, window::Window};
+//use fltk::{app, button::Button, frame::Frame, prelude::*, window::Window};
 
 mod viscolors;
 
@@ -164,6 +164,7 @@ fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     osc_colors: &[Color],
+    peak_color: Color,
     ys: &[u8],
     fft: &[u8],
     oscstyle: &str,
@@ -381,7 +382,8 @@ fn draw_visualizer(
                 zoom as u32,
                 zoom as u32,
             );
-            canvas.set_draw_color(_colors[23]);
+            let color = peak_color;
+            canvas.set_draw_color(color);
             canvas.fill_rect(rect).unwrap();
 	}
         // Define the spacing between vertical lines (every 4th place).
@@ -567,8 +569,21 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         //assert_eq!(&amplitudes, &[0, 0, 0, 8, 0, 0, 0, 0]);
 
         // Convert the ring buffer to a regular Vec<u8> and send it through the channel
-        tx.send(ring_buffer.iter().copied().collect()).unwrap();
-        s.send(amplitudes.iter().copied().collect()).unwrap();
+        match tx.send(ring_buffer.iter().copied().collect()) {
+            Ok(_) => {
+                // Send successful
+            }
+            Err(_err) => {
+            }
+        }
+        
+        match s.send(amplitudes.iter().copied().collect()) {
+            Ok(_) => {
+                // Send successful
+            }
+            Err(_err) => {
+            }
+        }
     };
 
     // When creating the stream, pattern match on the ConfigType to get the appropriate config
@@ -588,7 +603,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 }
 
-fn fltk(){
+/* fn fltk(){
 
     let app = app::App::default();
     let mut wind = Window::new(100, 100, 400, 300, "Hello from rust");
@@ -599,7 +614,7 @@ fn fltk(){
     but.set_callback(move |_| frame.set_label("Hello World!")); // the closure capture is mutable borrow to our button
     app.run().unwrap();
 
-}
+} */
 fn main() -> Result<(), anyhow::Error> {
     let args = Args::parse();
 
@@ -666,7 +681,8 @@ fn main() -> Result<(), anyhow::Error> {
     // Load the custom viscolor.txt file
     let mut viscolors = viscolors::load_colors(&args.viscolor);
     // extract relevant osc colors from the array
-    let mut osc_colors = osc_colors_and_peak(&viscolors);
+    let mut osc_colors = osccolors(&viscolors);
+    let mut peakrgb = peakc(&viscolors);
 
     // The vector to store captured audio samples.
     let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -678,7 +694,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     // Start the audio stream loop in a separate thread.
     thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index), amp));
-    thread::spawn(move || fltk());
+    //thread::spawn(move || fltk());
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -687,9 +703,11 @@ fn main() -> Result<(), anyhow::Error> {
                 Event::KeyDown { keycode: Some(Keycode::R), .. } => {
                     // Reload the viscolors data when "R" key is pressed
                     let new_viscolors = viscolors::load_colors(&args.viscolor);
-                    let new_osc_colors = osc_colors_and_peak(&new_viscolors);
+                    let new_osc_colors = osccolors(&new_viscolors);
+                    let new_peakrgb = peakc(&new_viscolors);
                     viscolors = new_viscolors;
                     osc_colors = new_osc_colors;
+                    peakrgb = new_peakrgb;
                 }
                 Event::KeyDown { keycode: Some(Keycode::B), .. } => {
                     // switch bandwidth
@@ -728,7 +746,7 @@ fn main() -> Result<(), anyhow::Error> {
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
 
         // draw the cool shit
         canvas.present();
@@ -769,7 +787,7 @@ fn prompt_for_device() -> Option<usize> {
     }
 }
 
-fn osc_colors_and_peak(colors: &[Color]) -> Vec<Color> {
+fn osccolors(colors: &[Color]) -> Vec<Color> {
     if colors.len() == 35 {
         vec![
             colors[18],
@@ -808,5 +826,13 @@ fn osc_colors_and_peak(colors: &[Color]) -> Vec<Color> {
             colors[22],
             colors[22],
         ]
+    }
+}
+
+fn peakc(colors: &[Color]) -> Color {
+    if colors.len() == 35 {
+        colors[34]
+    } else {
+        colors[23]
     }
 }

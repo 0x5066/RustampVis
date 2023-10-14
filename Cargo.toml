@@ -14,4 +14,5 @@ clap = { version = "4.3.19", features = ["derive"] }
 # audioviz = { version = "*"}
 microfft = "0.5.1"
 num = "0.4.1"
-fltk = "1.4.14"
+# fltk = "1.4.14"
+image = "0.24.7"
