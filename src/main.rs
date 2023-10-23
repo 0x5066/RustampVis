@@ -3,22 +3,27 @@
 
 extern crate sdl2;
 
-use sdl2::event::Event;
+use clap::Parser;
+
+use sdl2::event::{Event, WindowEvent};
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use std::sync::{Arc, Mutex};
+use sdl2::rect::Point;
+use sdl2::video::WindowContext;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
+use sdl2::render::{TextureCreator};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use anyhow;
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use std::thread;
-use clap::Parser;
-use std::collections::VecDeque;
+
 use num::Complex;
 use num::complex::ComplexFloat;
 
-//use fltk::{app, button::Button, frame::Frame, prelude::*, window::Window};
+use std::thread;
+use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 mod viscolors;
 
@@ -182,8 +187,8 @@ fn draw_visualizer(
     .collect(); // cast to i32
 
     let mut last_y = 0;
-    let mut top: i32 = 0; //bro it is being read though wth?!
-    let mut bottom: i32 = 0;
+    let mut top: i32;
+    let mut bottom: i32;
 
     let mut fft_iter = fft.iter();
 
@@ -335,10 +340,7 @@ fn draw_visualizer(
         for (i, bar) in bars.iter().enumerate() {
             let x = i as i32 * zoom as i32;
             let y = -bar.height2 as i32 + 15;
-
-            top = y; //come on now :|
-            bottom = 16;
-
+            
             if y >= 16{
                 top = 17;
                 bottom = y;
@@ -603,19 +605,68 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 }
 
-/* fn fltk(){
+fn draw_window(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    _colors: &[Color],
+    cgenex: &[Color],
+    texture_creator: &TextureCreator<WindowContext>,
+    font: &sdl2::ttf::Font,
+    oscstyle: &str
+) -> Result<(), String> {
+    let rect = Rect::new(0, 0, 606, 592);
+    canvas.set_draw_color(cgenex[2]);
+    canvas.fill_rect(rect).unwrap();
 
-    let app = app::App::default();
-    let mut wind = Window::new(100, 100, 400, 300, "Hello from rust");
-    let mut frame = Frame::new(0, 0, 400, 200, "");
-    let mut but = Button::new(160, 210, 75, 23, "Click me!");
-    wind.end();
-    wind.show();
-    but.set_callback(move |_| frame.set_label("Hello World!")); // the closure capture is mutable borrow to our button
-    app.run().unwrap();
+    let rect = Rect::new(10, 8, 165, 545);
+    canvas.set_draw_color(cgenex[0]);
+    canvas.fill_rect(rect).unwrap();
 
-} */
-fn main() -> Result<(), anyhow::Error> {
+    canvas.set_draw_color(cgenex[15]);
+    canvas.draw_line(Point::new(10, 554), Point::new(174, 554)).unwrap();
+    canvas.draw_line(Point::new(175, 554), Point::new(175, 8)).unwrap();
+
+    let rect = Rect::new(185, 28, 412, 556);
+    canvas.draw_rect(rect).unwrap();
+
+    let rect = Rect::new(187, 8, 116, 21);
+    canvas.draw_rect(rect).unwrap();
+
+    let tabtext: String = "Classic Visualization".to_string();
+    let classivis: String = "Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.".to_string();
+    let surface = font
+        .render(&tabtext)
+        .solid(cgenex[1])
+        .map_err(|e| e.to_string())?;
+
+    let surface2 = font
+        .render(&classivis)
+        .solid(cgenex[4])
+        .map_err(|e| e.to_string())?;
+    
+    let tex1 = texture_creator
+        .create_texture_from_surface(&surface)
+        .map_err(|e| e.to_string())?;
+
+    let tex2 = texture_creator
+        .create_texture_from_surface(&surface2)
+        .map_err(|e| e.to_string())?;
+
+    // Calculate the text dimensions
+    let Ok((text_width, text_height)) = font.size_of(&tabtext) else {todo!()};
+    let Ok((text2_width, text2_height)) = font.size_of(&classivis) else {todo!()};
+
+    // Calculate the target rectangle for the text based on text dimensions
+    let target = Rect::new(197 as i32, 11 as i32, text_width as u32, text_height as u32);
+    let target2 = Rect::new(206 as i32, 56 as i32, text2_width as u32, text2_height as u32);
+
+    canvas.copy(&tex1, None, Some(target))?;
+    canvas.copy(&tex2, None, Some(target2))?;
+
+    Ok(())
+
+}
+
+fn main() -> Result<(), String> {
     let args = Args::parse();
 
     let selected_device_index = match args.device {
@@ -646,6 +697,8 @@ fn main() -> Result<(), anyhow::Error> {
     let mut peakfo = args.peakfo;
     let mut barfo = args.barfo;
 
+    println!("Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.");
+
     if args.peakfo <= 1 {
         peakfo = 1;
     } else if args.peakfo >= 5 {
@@ -669,12 +722,27 @@ fn main() -> Result<(), anyhow::Error> {
     // set up sdl2
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
+    sdl2::hint::set("SDL_HINT_RENDER_SCALE_QUALITY", "0");
     let window = video_subsystem
         .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
         .position_centered()
         .build()
         .unwrap();
+    // this is new
+    let window2 = video_subsystem
+        .window("RustampVis Preferences", 606 as u32, 592 as u32)
+        .position_centered()
+        .build()
+        .unwrap();
     let mut canvas = window.into_canvas().build().unwrap();
+
+    //this is also new
+    let mut canvas2 = window2.into_canvas().build().unwrap();
+    let ttf_context = sdl2::ttf::init().unwrap();
+    let font_path: &Path = Path::new(&"font/tahoma.ttf");
+    let texture_creator = canvas2.texture_creator();
+    let mut font = ttf_context.load_font(font_path, 11)?;
+    font.set_hinting(sdl2::ttf::Hinting::Mono);
 
     let mut event_pump = sdl_context.event_pump().unwrap();
 
@@ -683,6 +751,7 @@ fn main() -> Result<(), anyhow::Error> {
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
+    let genex_colors = genex();
 
     // The vector to store captured audio samples.
     let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -699,8 +768,14 @@ fn main() -> Result<(), anyhow::Error> {
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
-                Event::Quit { .. } => break 'running,
-                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                Event::Quit {..} |
+                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
+                    break 'running
+                },
+                Event::Window { win_event: WindowEvent::Close, .. } => {
+                    // SDL_GetWindowByID, SDL_HideWindow it
+                },
+                Event::KeyDown { window_id: 1, keycode: Some(Keycode::R), .. } => {
                     // Reload the viscolors data when "R" key is pressed
                     let new_viscolors = viscolors::load_colors(&args.viscolor);
                     let new_osc_colors = osccolors(&new_viscolors);
@@ -709,7 +784,7 @@ fn main() -> Result<(), anyhow::Error> {
                     osc_colors = new_osc_colors;
                     peakrgb = new_peakrgb;
                 }
-                Event::KeyDown { keycode: Some(Keycode::B), .. } => {
+                Event::KeyDown { window_id: 1, keycode: Some(Keycode::B), .. } => {
                     // switch bandwidth
                     if bandwidth == "thick"{
                         switch_bandwidth(&mut bandwidth);
@@ -717,14 +792,14 @@ fn main() -> Result<(), anyhow::Error> {
                         switch_bandwidth(&mut bandwidth);
                     }
                 }
-                Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => {
+                Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Right, .. } => {
                     if mode == 1{
                         switch_oscstyle(&mut oscstyle);
                     } else if mode == 0 {
                         switch_specstyle(&mut specdraw);
                     }
                 }
-                Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } => {
+                Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Left, .. } => {
                     mode = (mode + 1) % 3;
                     //println!("{mode}")
                 }
@@ -747,9 +822,11 @@ fn main() -> Result<(), anyhow::Error> {
 
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, oscstyle)?;
 
         // draw the cool shit
         canvas.present();
+        canvas2.present();
 
         std::thread::sleep(std::time::Duration::from_millis(0));
     }
@@ -835,4 +912,31 @@ fn peakc(colors: &[Color]) -> Color {
     } else {
         colors[23]
     }
+}
+
+fn genex() -> Vec<Color> {
+    vec![
+        Color::RGB(0, 0, 0),      // item background (background to edits, listviews etc) 0
+        Color::RGB(0, 255, 0),    // item foreground (text color of edit/listview, etc) 1
+        Color::RGB(56, 55, 87),   // window background (used to set the bg color for the dialog) 2
+        Color::RGB(57, 57, 66),   // button text color 3
+        Color::RGB(255, 255, 255),// window text color 4
+        Color::RGB(132, 148, 165),// color of dividers and sunken borders 5
+        Color::RGB(0, 0, 198),    // selection color for listviews/playlists/etc 6
+        Color::RGB(72, 72, 120),  // listview header background color 7
+        Color::RGB(255, 255, 255),// listview header text color 8
+        Color::RGB(108, 108, 180),// listview header frame top color 9
+        Color::RGB(36, 36, 60),   // listview header frame middle color 10
+        Color::RGB(18, 18, 30),   // listview header frame bottom color 11
+        Color::RGB(36, 36, 60),   // listview header empty color 12
+        Color::RGB(36, 36, 60),   // scrollbar foreground color 13
+        Color::RGB(36, 36, 60),   // scrollbar background color 14
+        Color::RGB(121, 130, 150),// inverse scrollbar foreground color 15
+        Color::RGB(78, 88, 110),  // inverse scrollbar background color 16
+        Color::RGB(36, 36, 60),   // scrollbar dead area color, seemingly unused... 17
+        Color::RGB(255, 255, 255),// listview/treeview selection bar textcolor 18
+        Color::RGB(0, 0, 180),    // listview/treeview selectionbar back color 19
+        Color::RGB(0, 255, 0),    // listview/treeview selection bar textcolor (inactive) 20
+        Color::RGB(0, 0, 128),    // listview/treeview selectionbar back color (inactive) 21
+    ]
 }
