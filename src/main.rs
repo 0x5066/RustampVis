@@ -13,6 +13,7 @@ use sdl2::video::WindowContext;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
 use sdl2::render::{TextureCreator};
+use sdl2::ttf::Font;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -605,14 +606,116 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 }
 
+fn newline_handler<'a>(
+    text: &'a str,
+    font: &'a Font<'a, 'a>,
+    texture_creator: &'a TextureCreator<sdl2::video::WindowContext>,
+    color: Color,
+) -> Result<Vec<sdl2::render::Texture<'a>>, String> {
+    // Split the input text into lines based on '\n'
+    let lines: Vec<&str> = text.split('\n').collect();
+
+    // Create textures for each line
+    let mut textures = Vec::new();
+    for line in lines {
+        let surface = font.render(line).solid(color).map_err(|e| e.to_string())?;
+        let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+        textures.push(texture);
+    }
+
+    Ok(textures)
+}
+
+fn render_text(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &Font,
+    text: &str,
+    color: Color,
+    target_x: i32,
+    target_y: i32,
+    texture_creator: &TextureCreator<WindowContext>,
+) -> Result<(), String> {
+    let surface = font.render(text).solid(color).map_err(|e| e.to_string())?;
+    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+    let (text_width, text_height) = font.size_of(text).map_err(|e| e.to_string())?;
+    let target = Rect::new(target_x, target_y, text_width, text_height);
+    canvas.copy(&texture, None, Some(target))?;
+    Ok(())
+}
+
+fn groupbox(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    text: &str,
+    font: &sdl2::ttf::Font,
+    texture_creator: &TextureCreator<WindowContext>,
+    color: &[Color],
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    // Draw the outer box
+    let rect = Rect::new(x, y, width, height);
+    canvas.set_draw_color(color[2]);
+    canvas.draw_rect(rect)?;
+
+    // Calculate the text dimensions
+    let (text_width, text_height) = font.size_of(text).map_err(|e| e.to_string())?;
+
+    // Create texture for the text
+    let surface = font.render(text).solid(color[1]).map_err(|e| e.to_string())?;
+    //let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+
+    // Draw horizontal and vertical lines inside the groupbox
+    canvas.set_draw_color(color[10]); // Set line color
+    // Top horizontal line
+    canvas.draw_line(Point::new(x, y+5), Point::new(x + 7 as i32, y+5)).unwrap();
+    canvas.draw_line(Point::new(x + text_width as i32 + 15, y+5), Point::new(x + width as i32, y+5)).unwrap();
+
+    // Left vertical line
+    canvas.draw_line(Point::new(x, y+5), Point::new(x, y + height as i32)).unwrap();
+
+    // Right vertical line
+    canvas.draw_line(Point::new(x + width as i32, y+5), Point::new(x + width as i32, y + height as i32)).unwrap();
+
+    // Bottom horizontal line
+    canvas.draw_line(Point::new(x, y + height as i32), Point::new(x + width as i32, y + height as i32)).unwrap();
+
+    // indented top line
+    canvas.set_draw_color(color[15]);
+    canvas.draw_line(Point::new(x + 1, y+6), Point::new(x + 8 as i32, y + 6)).unwrap();
+    canvas.draw_line(Point::new(x + text_width as i32 + 14, y+6), Point::new(x + width as i32 - 1, y+6)).unwrap();
+
+    // indented left line
+    canvas.draw_line(Point::new(x + 1, y+6), Point::new(x + 1, y + height as i32 - 1)).unwrap();
+
+    // indented bottom line
+    canvas.draw_line(Point::new(x, y + height as i32 + 1), Point::new(x + width as i32 + 1, y + height as i32 + 1)).unwrap();
+
+    // Right vertical line
+    canvas.draw_line(Point::new(x + width as i32 + 1, y+5), Point::new(x + width as i32 + 1, y + height as i32)).unwrap();
+
+    Ok(())
+}
+
 fn draw_window(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     cgenex: &[Color],
     texture_creator: &TextureCreator<WindowContext>,
     font: &sdl2::ttf::Font,
-    oscstyle: &str
+    oscstyle: &str,
+    mode: u8,
 ) -> Result<(), String> {
+    let mut visstatus: String = "".to_string();
+
+    if mode == 0 {
+        visstatus = "Spectrum Analyzer".to_string();
+    } else if mode == 1 {
+        visstatus = "Oscilloscope".to_string();
+    } else if mode == 2 {
+        visstatus = "None".to_string();
+    }
     let rect = Rect::new(0, 0, 606, 592);
     canvas.set_draw_color(cgenex[2]);
     canvas.fill_rect(rect).unwrap();
@@ -622,48 +725,63 @@ fn draw_window(
     canvas.fill_rect(rect).unwrap();
 
     canvas.set_draw_color(cgenex[15]);
-    canvas.draw_line(Point::new(10, 554), Point::new(174, 554)).unwrap();
-    canvas.draw_line(Point::new(175, 554), Point::new(175, 8)).unwrap();
+    //bottom
+    canvas.draw_line(Point::new(10, 554), Point::new(175, 554)).unwrap();
+    //right
+    canvas.draw_line(Point::new(176, 554), Point::new(176, 8)).unwrap();
 
+    canvas.set_draw_color(cgenex[10]);
+    //bottom
+    canvas.draw_line(Point::new(10, 553), Point::new(175, 553)).unwrap();
+    //right
+    canvas.draw_line(Point::new(175, 553), Point::new(175, 8)).unwrap();
+
+    canvas.set_draw_color(cgenex[15]);
     let rect = Rect::new(185, 28, 412, 556);
     canvas.draw_rect(rect).unwrap();
 
+    //tab
     let rect = Rect::new(187, 8, 116, 21);
     canvas.draw_rect(rect).unwrap();
+    canvas.set_draw_color(cgenex[10]);
+    let rect = Rect::new(188, 9, 114, 19);
+    canvas.fill_rect(rect).unwrap();
+
+    //vis box
+    canvas.set_draw_color(cgenex[15]);
+    let rect = Rect::new(206, 105, 362, 21);
+    canvas.draw_rect(rect).unwrap();
+    canvas.set_draw_color(cgenex[0]);
+    let rect = Rect::new(207, 106, 360, 19);
+    canvas.fill_rect(rect).unwrap();
 
     let tabtext: String = "Classic Visualization".to_string();
     let classivis: String = "Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.".to_string();
-    let surface = font
-        .render(&tabtext)
-        .solid(cgenex[1])
-        .map_err(|e| e.to_string())?;
+    let groupboxtext1: String = "Classic Visualization Settings".to_string();
+    let vis_text = &visstatus;
 
-    let surface2 = font
-        .render(&classivis)
-        .solid(cgenex[4])
-        .map_err(|e| e.to_string())?;
-    
-    let tex1 = texture_creator
-        .create_texture_from_surface(&surface)
-        .map_err(|e| e.to_string())?;
+    groupbox(canvas, &groupboxtext1, font, texture_creator, cgenex, 195, 37, 384, 125)?;
 
-    let tex2 = texture_creator
-        .create_texture_from_surface(&surface2)
-        .map_err(|e| e.to_string())?;
+    render_text(canvas, font, &tabtext, cgenex[1], 197, 11, texture_creator)?;
+    render_text(canvas, font, &groupboxtext1, cgenex[1], 203, 37, texture_creator)?;
+    render_text(canvas, font, vis_text, cgenex[1], 212, 108, texture_creator)?;
 
-    // Calculate the text dimensions
-    let Ok((text_width, text_height)) = font.size_of(&tabtext) else {todo!()};
-    let Ok((text2_width, text2_height)) = font.size_of(&classivis) else {todo!()};
+    // Use the split_lines_and_create_textures function for classivis
+    let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
 
-    // Calculate the target rectangle for the text based on text dimensions
-    let target = Rect::new(197 as i32, 11 as i32, text_width as u32, text_height as u32);
-    let target2 = Rect::new(206 as i32, 56 as i32, text2_width as u32, text2_height as u32);
+    // Draw tex2
+     let mut y = 56;
+    for texture in tex2 {
+        let texture_query = texture.query(); // Get the TextureQuery struct
+        let w = texture_query.width;
+        let h = texture_query.height;
+        let target2 = Rect::new(206 as i32, y as i32, w, h);
+        canvas.copy(&texture, None, Some(target2))?;
+        y += h as i32;
+    }
 
-    canvas.copy(&tex1, None, Some(target))?;
-    canvas.copy(&tex2, None, Some(target2))?;
 
     Ok(())
-
 }
 
 fn main() -> Result<(), String> {
@@ -696,8 +814,6 @@ fn main() -> Result<(), String> {
     let mut bandwidth = args.bandwidth.as_str();
     let mut peakfo = args.peakfo;
     let mut barfo = args.barfo;
-
-    println!("Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.");
 
     if args.peakfo <= 1 {
         peakfo = 1;
@@ -822,7 +938,7 @@ fn main() -> Result<(), String> {
 
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, oscstyle)?;
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, oscstyle, mode)?;
 
         // draw the cool shit
         canvas.present();
