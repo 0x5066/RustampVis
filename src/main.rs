@@ -5,15 +5,15 @@ extern crate sdl2;
 
 use clap::Parser;
 
-use sdl2::event::{Event, WindowEvent};
+use sdl2::image::{InitFlag, LoadSurface};
+use sdl2::keyboard::Keycode;
+use sdl2::mouse::Cursor;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::rect::Point;
+use sdl2::event::{Event, WindowEvent};
 use sdl2::video::WindowContext;
-use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
-use sdl2::render::{TextureCreator};
-use sdl2::ttf::Font;
+use sdl2::render::TextureCreator;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -23,10 +23,17 @@ use num::complex::ComplexFloat;
 
 use std::thread;
 use std::collections::VecDeque;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 mod viscolors;
+mod comctl;
+
+use crate::comctl::listview_box;
+use crate::comctl::groupbox;
+use crate::comctl::render_text;
+use crate::comctl::newline_handler;
+use crate::comctl::draw_dropdown;
+use crate::comctl::checkbox;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
@@ -166,6 +173,69 @@ fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     y0 + (x - x0) * (y1 - y0) / (x1 - x0)
 }
 
+fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8) {
+    if bandwidth == "thick" {
+        for bars_chunk in bars.chunks_mut(4) {
+            let mut sum = 0.0;
+
+            for _ in 0..24 * 2 {
+                if let Some(fft_value) = fft_iter.next() {
+                    sum += *fft_value as f64 + 9.0;
+                } else {
+                    break;
+                }
+            }
+
+            for bar in bars_chunk.iter_mut().take(4) {
+                bar.height = sum / (25.0 * 2.0);
+                if bar.height >= 15.0 {
+                    bar.height = 15.0;
+                }
+            }
+        }
+    } else {
+        for bars_chunk in bars.chunks_mut(1) {
+            let mut sum = 0.0;
+
+            for _ in 0..6 * 2 {
+                if let Some(fft_value) = fft_iter.next() {
+                    sum += *fft_value as f64 + 9.0;
+                } else {
+                    break;
+                }
+            }
+
+            for bar in bars_chunk.iter_mut() {
+                bar.height = sum / (7.0 * 2.0);
+                if bar.height >= 15.0 {
+                    bar.height = 15.0;
+                }
+            }
+        }
+    }
+
+    for i in 0..NUM_BARS {
+        bars[i].height2 -= bars[i].bargrav;
+
+        if bars[i].height2 <= bars[i].height {
+            bars[i].height2 = bars[i].height;
+        }
+        if bars[i].height2 > bars[i].peak {
+            bars[i].gravity = 0.0;
+            bars[i].peak = bars[i].height2;
+        } else {
+            if bars[i].gravity <= 16.0 {
+                bars[i].gravity += (1.0 / 512.0) * (peakfo as f64);
+            }
+            bars[i].peak = if bars[i].peak <= 0.0 {
+                0.0
+            } else {
+                bars[i].peak - bars[i].gravity
+            };
+        }
+    }
+}
+
 fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
@@ -191,80 +261,8 @@ fn draw_visualizer(
     let mut top: i32;
     let mut bottom: i32;
 
-    let mut fft_iter = fft.iter();
-
     // analyzer stuff
-    if bandwidth == "thick"{
-        for bars_chunk in bars.chunks_mut(4) {
-            let mut sum = 0.0;
-        
-            for _ in 0..24*2 {
-                if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 9.0;
-                    //println!("{sum}");
-                } else {
-                    break;
-                }
-            }
-        
-            for bar in bars_chunk.iter_mut().take(4) {
-                bar.height = sum / (25.0 * 2.0);
-                if bar.height >= 15.0 {
-                    bar.height = 15.0;
-                }
-            }
-        }
-        
-    } else {
-        for bars_chunk in bars.chunks_mut(1) {
-            let mut sum = 0.0;
-        
-            for _ in 0..6*2 {
-                if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 9.0;
-                    //println!("{sum}");
-                } else {
-                    break;
-                }
-            }
-        
-            for bar in bars_chunk.iter_mut() {
-                bar.height = sum / (7.0 * 2.0);
-                if bar.height >= 15.0 {
-                    bar.height = 15.0;
-                }
-            }
-        }
-    }
-
-    for i in 0..NUM_BARS {
-        bars[i].height2 -= bars[i].bargrav;
-        /*println!(
-            "Bar {} - Height: {}, Peak: {}, Gravity: {}",
-            i + 1,
-            bars[i].height,
-            bars[i].peak,
-            bars[i].gravity
-        );*/
-
-        if bars[i].height2 <= bars[i].height {
-            bars[i].height2 = bars[i].height;
-        }
-        if bars[i].height2 > bars[i].peak {
-            bars[i].gravity = 0.0;
-            bars[i].peak = bars[i].height2;
-            
-        } else {
-            if bars[i].gravity <= 16.0 {
-                bars[i].gravity += (1.0 / 512.0) * (peakfo as f64);
-            }
-            bars[i].peak = if bars[i].peak <= 0.0 {
-                0.0
-            } else {
-                bars[i].peak - bars[i].gravity
-            };
-        } 
-    }
+    process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo);
 
     for x in 0..75 {
         for y in 0..16 {
@@ -606,104 +604,13 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 }
 
-fn newline_handler<'a>(
-    text: &'a str,
-    font: &'a Font<'a, 'a>,
-    texture_creator: &'a TextureCreator<sdl2::video::WindowContext>,
-    color: Color,
-) -> Result<Vec<sdl2::render::Texture<'a>>, String> {
-    // Split the input text into lines based on '\n'
-    let lines: Vec<&str> = text.split('\n').collect();
-
-    // Create textures for each line
-    let mut textures = Vec::new();
-    for line in lines {
-        let surface = font.render(line).solid(color).map_err(|e| e.to_string())?;
-        let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
-        textures.push(texture);
-    }
-
-    Ok(textures)
-}
-
-fn render_text(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    font: &Font,
-    text: &str,
-    color: Color,
-    target_x: i32,
-    target_y: i32,
-    texture_creator: &TextureCreator<WindowContext>,
-) -> Result<(), String> {
-    let surface = font.render(text).solid(color).map_err(|e| e.to_string())?;
-    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
-    let (text_width, text_height) = font.size_of(text).map_err(|e| e.to_string())?;
-    let target = Rect::new(target_x, target_y, text_width, text_height);
-    canvas.copy(&texture, None, Some(target))?;
-    Ok(())
-}
-
-fn groupbox(
-    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    text: &str,
-    font: &sdl2::ttf::Font,
-    texture_creator: &TextureCreator<WindowContext>,
-    color: &[Color],
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    // Draw the outer box
-    let rect = Rect::new(x, y, width, height);
-    canvas.set_draw_color(color[2]);
-    canvas.draw_rect(rect)?;
-
-    // Calculate the text dimensions
-    let (text_width, text_height) = font.size_of(text).map_err(|e| e.to_string())?;
-
-    // Create texture for the text
-    let surface = font.render(text).solid(color[1]).map_err(|e| e.to_string())?;
-    //let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
-
-    // Draw horizontal and vertical lines inside the groupbox
-    canvas.set_draw_color(color[10]); // Set line color
-    // Top horizontal line
-    canvas.draw_line(Point::new(x, y+5), Point::new(x + 7 as i32, y+5)).unwrap();
-    canvas.draw_line(Point::new(x + text_width as i32 + 15, y+5), Point::new(x + width as i32, y+5)).unwrap();
-
-    // Left vertical line
-    canvas.draw_line(Point::new(x, y+5), Point::new(x, y + height as i32)).unwrap();
-
-    // Right vertical line
-    canvas.draw_line(Point::new(x + width as i32, y+5), Point::new(x + width as i32, y + height as i32)).unwrap();
-
-    // Bottom horizontal line
-    canvas.draw_line(Point::new(x, y + height as i32), Point::new(x + width as i32, y + height as i32)).unwrap();
-
-    // indented top line
-    canvas.set_draw_color(color[15]);
-    canvas.draw_line(Point::new(x + 1, y+6), Point::new(x + 8 as i32, y + 6)).unwrap();
-    canvas.draw_line(Point::new(x + text_width as i32 + 14, y+6), Point::new(x + width as i32 - 1, y+6)).unwrap();
-
-    // indented left line
-    canvas.draw_line(Point::new(x + 1, y+6), Point::new(x + 1, y + height as i32 - 1)).unwrap();
-
-    // indented bottom line
-    canvas.draw_line(Point::new(x, y + height as i32 + 1), Point::new(x + width as i32 + 1, y + height as i32 + 1)).unwrap();
-
-    // Right vertical line
-    canvas.draw_line(Point::new(x + width as i32 + 1, y+5), Point::new(x + width as i32 + 1, y + height as i32)).unwrap();
-
-    Ok(())
-}
-
 fn draw_window(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     cgenex: &[Color],
     texture_creator: &TextureCreator<WindowContext>,
     font: &sdl2::ttf::Font,
+    marlett: &sdl2::ttf::Font,
     oscstyle: &str,
     mode: u8,
 ) -> Result<(), String> {
@@ -714,33 +621,20 @@ fn draw_window(
     } else if mode == 1 {
         visstatus = "Oscilloscope".to_string();
     } else if mode == 2 {
-        visstatus = "None".to_string();
+        visstatus = "Disabled".to_string();
     }
     let rect = Rect::new(0, 0, 606, 592);
     canvas.set_draw_color(cgenex[2]);
     canvas.fill_rect(rect).unwrap();
 
-    let rect = Rect::new(10, 8, 165, 545);
-    canvas.set_draw_color(cgenex[0]);
-    canvas.fill_rect(rect).unwrap();
-
-    canvas.set_draw_color(cgenex[15]);
-    //bottom
-    canvas.draw_line(Point::new(10, 554), Point::new(175, 554)).unwrap();
-    //right
-    canvas.draw_line(Point::new(176, 554), Point::new(176, 8)).unwrap();
-
-    canvas.set_draw_color(cgenex[10]);
-    //bottom
-    canvas.draw_line(Point::new(10, 553), Point::new(175, 553)).unwrap();
-    //right
-    canvas.draw_line(Point::new(175, 553), Point::new(175, 8)).unwrap();
-
-    canvas.set_draw_color(cgenex[15]);
+    canvas.set_draw_color(cgenex[5]);
     let rect = Rect::new(185, 28, 412, 556);
     canvas.draw_rect(rect).unwrap();
 
+    listview_box(canvas, cgenex, 10, 8, 165, 545)?;
+
     //tab
+    canvas.set_draw_color(cgenex[5]);
     let rect = Rect::new(187, 8, 116, 21);
     canvas.draw_rect(rect).unwrap();
     canvas.set_draw_color(cgenex[10]);
@@ -748,23 +642,29 @@ fn draw_window(
     canvas.fill_rect(rect).unwrap();
 
     //vis box
-    canvas.set_draw_color(cgenex[15]);
-    let rect = Rect::new(206, 105, 362, 21);
-    canvas.draw_rect(rect).unwrap();
-    canvas.set_draw_color(cgenex[0]);
-    let rect = Rect::new(207, 106, 360, 19);
-    canvas.fill_rect(rect).unwrap();
+    draw_dropdown(canvas, cgenex, 206, 105, 362, 21)?;
 
     let tabtext: String = "Classic Visualization".to_string();
     let classivis: String = "Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.".to_string();
     let groupboxtext1: String = "Classic Visualization Settings".to_string();
+    let groupboxtext2: String = "Spectrum Analyzer Options".to_string();
+    let groupboxtext3: String = "Oscilloscope Options".to_string();
+    let gbinfo1: String = "Coloring Style".to_string();
+    let gbinfo2: String = "Band line width".to_string();
+    let gbinfo3: String = "Oscilloscope drawing".to_string();
     let vis_text = &visstatus;
 
     groupbox(canvas, &groupboxtext1, font, texture_creator, cgenex, 195, 37, 384, 125)?;
+    groupbox(canvas, &groupboxtext2, font, texture_creator, cgenex, 195, 170, 384, 153)?;
+    groupbox(canvas, &groupboxtext3, font, texture_creator, cgenex, 195, 333, 384, 46)?;
 
     render_text(canvas, font, &tabtext, cgenex[1], 197, 11, texture_creator)?;
-    render_text(canvas, font, &groupboxtext1, cgenex[1], 203, 37, texture_creator)?;
     render_text(canvas, font, vis_text, cgenex[1], 212, 108, texture_creator)?;
+    render_text(canvas, font, &gbinfo1, cgenex[4], 206, 193, texture_creator)?;
+    render_text(canvas, font, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
+    render_text(canvas, font, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
+
+    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator)?;
 
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
@@ -779,8 +679,6 @@ fn draw_window(
         canvas.copy(&texture, None, Some(target2))?;
         y += h as i32;
     }
-
-
     Ok(())
 }
 
@@ -836,9 +734,10 @@ fn main() -> Result<(), String> {
     }; NUM_BARS];
 
     // set up sdl2
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-    sdl2::hint::set("SDL_HINT_RENDER_SCALE_QUALITY", "0");
+    let sdl_context = sdl2::init()?;
+    let video_subsystem = sdl_context.video()?;
+    let _image_context = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
+    //sdl2::hint::set("SDL_HINT_RENDER_SCALE_QUALITY", "0");
     let window = video_subsystem
         .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
         .position_centered()
@@ -855,12 +754,19 @@ fn main() -> Result<(), String> {
     //this is also new
     let mut canvas2 = window2.into_canvas().build().unwrap();
     let ttf_context = sdl2::ttf::init().unwrap();
-    let font_path: &Path = Path::new(&"font/tahoma.ttf");
     let texture_creator = canvas2.texture_creator();
-    let mut font = ttf_context.load_font(font_path, 11)?;
+    let mut font = ttf_context.load_font(&"font/tahoma.ttf", 11)?;
+    let mut vectorgfx = ttf_context.load_font(&"font/marlett.ttf", 15)?;
     font.set_hinting(sdl2::ttf::Hinting::Mono);
+    vectorgfx.set_hinting(sdl2::ttf::Hinting::Mono);
 
     let mut event_pump = sdl_context.event_pump().unwrap();
+
+    let surface =
+    sdl2::surface::Surface::from_file(&"NORMAL.PNG").map_err(|err| format!("failed to load cursor image: {}", err))?;
+    let cursor = Cursor::from_surface(surface, 0, 0)
+        .map_err(|err| format!("failed to load cursor: {}", err))?;
+    cursor.set();
 
     // Load the custom viscolor.txt file
     let mut viscolors = viscolors::load_colors(&args.viscolor);
@@ -938,7 +844,7 @@ fn main() -> Result<(), String> {
 
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, oscstyle, mode)?;
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode)?;
 
         // draw the cool shit
         canvas.present();

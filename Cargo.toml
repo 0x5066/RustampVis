@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sdl2 = { version = "0.34", features = ["ttf"] }
+sdl2 = { version = "0.34", features = ["ttf", "image"] }
 cpal = { version = "*"}
 anyhow = "1.0.72"
 crossbeam-channel = "0.5.8"
