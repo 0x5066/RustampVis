@@ -25,6 +25,8 @@ use std::thread;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use image::GenericImageView;
+
 mod viscolors;
 mod comctl;
 
@@ -34,6 +36,9 @@ use crate::comctl::render_text;
 use crate::comctl::newline_handler;
 use crate::comctl::draw_dropdown;
 use crate::comctl::checkbox;
+use crate::comctl::slider_small;
+use crate::comctl::tab;
+use crate::comctl::button;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
@@ -613,6 +618,7 @@ fn draw_window(
     marlett: &sdl2::ttf::Font,
     oscstyle: &str,
     mode: u8,
+    image_path: &str,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
 
@@ -633,14 +639,6 @@ fn draw_window(
 
     listview_box(canvas, cgenex, 10, 8, 165, 545)?;
 
-    //tab
-    canvas.set_draw_color(cgenex[5]);
-    let rect = Rect::new(187, 8, 116, 21);
-    canvas.draw_rect(rect).unwrap();
-    canvas.set_draw_color(cgenex[10]);
-    let rect = Rect::new(188, 9, 114, 19);
-    canvas.fill_rect(rect).unwrap();
-
     //vis box
     draw_dropdown(canvas, cgenex, 206, 105, 362, 21)?;
 
@@ -649,22 +647,37 @@ fn draw_window(
     let groupboxtext1: String = "Classic Visualization Settings".to_string();
     let groupboxtext2: String = "Spectrum Analyzer Options".to_string();
     let groupboxtext3: String = "Oscilloscope Options".to_string();
-    let gbinfo1: String = "Coloring Style".to_string();
-    let gbinfo2: String = "Band line width".to_string();
+    let gbinfo1: String = "Coloring Style:".to_string();
+    let gbinfo2: String = "Band line width:".to_string();
     let gbinfo3: String = "Oscilloscope drawing".to_string();
     let vis_text = &visstatus;
+
+    tab(canvas, cgenex, 187, 8, &tabtext, font, texture_creator)?;
+
+/*         //tab
+        canvas.set_draw_color(cgenex[5]);
+        let rect = Rect::new(187, 8, 116, 21);
+        canvas.draw_rect(rect).unwrap();
+        canvas.set_draw_color(cgenex[10]);
+        let rect = Rect::new(188, 9, 114, 19);
+        canvas.fill_rect(rect).unwrap();
+        render_text(canvas, font, &tabtext, cgenex[1], 197, 11, texture_creator)?; */
 
     groupbox(canvas, &groupboxtext1, font, texture_creator, cgenex, 195, 37, 384, 125)?;
     groupbox(canvas, &groupboxtext2, font, texture_creator, cgenex, 195, 170, 384, 153)?;
     groupbox(canvas, &groupboxtext3, font, texture_creator, cgenex, 195, 333, 384, 46)?;
 
-    render_text(canvas, font, &tabtext, cgenex[1], 197, 11, texture_creator)?;
     render_text(canvas, font, vis_text, cgenex[1], 212, 108, texture_creator)?;
     render_text(canvas, font, &gbinfo1, cgenex[4], 206, 193, texture_creator)?;
     render_text(canvas, font, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
     render_text(canvas, font, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
 
     checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator)?;
+
+    slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, 5)?;
+    slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, 5)?;
+
+    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path)?;
 
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
@@ -743,7 +756,7 @@ fn main() -> Result<(), String> {
         .position_centered()
         .build()
         .unwrap();
-    // this is new
+
     let window2 = video_subsystem
         .window("RustampVis Preferences", 606 as u32, 592 as u32)
         .position_centered()
@@ -773,8 +786,7 @@ fn main() -> Result<(), String> {
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
-    let genex_colors = genex();
-
+    
     // The vector to store captured audio samples.
     let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
     let spec_data = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -786,6 +798,9 @@ fn main() -> Result<(), String> {
     // Start the audio stream loop in a separate thread.
     thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index), amp));
     //thread::spawn(move || fltk());
+
+    let image_path = "gen_ex.png";
+    let genex_colors = genex(image_path);
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -844,7 +859,7 @@ fn main() -> Result<(), String> {
 
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode)?;
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path)?;
 
         // draw the cool shit
         canvas.present();
@@ -936,29 +951,25 @@ fn peakc(colors: &[Color]) -> Color {
     }
 }
 
-fn genex() -> Vec<Color> {
-    vec![
-        Color::RGB(0, 0, 0),      // item background (background to edits, listviews etc) 0
-        Color::RGB(0, 255, 0),    // item foreground (text color of edit/listview, etc) 1
-        Color::RGB(56, 55, 87),   // window background (used to set the bg color for the dialog) 2
-        Color::RGB(57, 57, 66),   // button text color 3
-        Color::RGB(255, 255, 255),// window text color 4
-        Color::RGB(132, 148, 165),// color of dividers and sunken borders 5
-        Color::RGB(0, 0, 198),    // selection color for listviews/playlists/etc 6
-        Color::RGB(72, 72, 120),  // listview header background color 7
-        Color::RGB(255, 255, 255),// listview header text color 8
-        Color::RGB(108, 108, 180),// listview header frame top color 9
-        Color::RGB(36, 36, 60),   // listview header frame middle color 10
-        Color::RGB(18, 18, 30),   // listview header frame bottom color 11
-        Color::RGB(36, 36, 60),   // listview header empty color 12
-        Color::RGB(36, 36, 60),   // scrollbar foreground color 13
-        Color::RGB(36, 36, 60),   // scrollbar background color 14
-        Color::RGB(121, 130, 150),// inverse scrollbar foreground color 15
-        Color::RGB(78, 88, 110),  // inverse scrollbar background color 16
-        Color::RGB(36, 36, 60),   // scrollbar dead area color, seemingly unused... 17
-        Color::RGB(255, 255, 255),// listview/treeview selection bar textcolor 18
-        Color::RGB(0, 0, 180),    // listview/treeview selectionbar back color 19
-        Color::RGB(0, 255, 0),    // listview/treeview selection bar textcolor (inactive) 20
-        Color::RGB(0, 0, 128),    // listview/treeview selectionbar back color (inactive) 21
-    ]
+fn genex(image_path: &str) -> Vec<Color> {
+    // Open an image file
+    let img = image::open(image_path).unwrap();
+
+    // Initialize the vector to hold the colors
+    let mut color_vector: Vec<Color> = Vec::new();
+
+    // Iterate over the image pixels and convert them to SDL2 Color
+    for y in 0..1 {
+        for x in (48..96).step_by(2) {
+            let pixel = img.get_pixel(x, y);
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+            let color = Color::RGB(r, g, b);
+            color_vector.push(color);
+            //println!("{:?}", pixel);
+        }
+    }
+
+    color_vector
 }

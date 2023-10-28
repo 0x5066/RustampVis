@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use sdl2::pixels::Color;
 use std::path::Path;
-use image::{open};
+use image::open;
 
 pub fn load_colors(file_path: &str) -> Vec<Color> {
     let mut colors = Vec::new();
