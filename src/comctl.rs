@@ -231,6 +231,9 @@ pub fn button(
     font: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
     image_path: &str,
+    is_button_clicked: bool,
+    mx: i32,
+    my: i32,
 ) -> Result<(), String> {
 
     // Calculate the text dimensions
@@ -245,7 +248,7 @@ pub fn button(
     let text_y = y + (height as i32 - text_height as i32) / 2;
 
     // Create a Rect for the text
-    let target = Rect::new(text_x, text_y, text_width, text_height);
+    let target;
 
     let image_texture = texture_creator.load_texture(image_path)?;
 
@@ -266,33 +269,73 @@ pub fn button(
     canvas.fill_rect(rect)?; */
 
         // Define the source and destination rectangles to copy a piece of the image
-        let src_tl_rect = Rect::new(0, 0, 4, 4); // src image
-        let dst_tl_rect = Rect::new(x, y, 4, 4); // dest image
+        let text_offset: i32;
+        let button_offset: i32;
 
-        let src_tm_rect = Rect::new(4, 0, 39, 4);
-        let dst_tm_rect = Rect::new(x + 4, y, width - 7, 4);
+        let src_tl_rect;
+        let dst_tl_rect;
 
-        let src_tr_rect = Rect::new(43, 0, 4, 4);
-        let dst_tr_rect = Rect::new(x + width as i32 - 3, y, 4, 4);
+        let src_tm_rect;
+        let dst_tm_rect;
 
-        let src_l_rect = Rect::new(0, 4, 4, 7);
-        let dst_l_rect = Rect::new(x, y + 4, 4, height - 7);
+        let src_tr_rect;
+        let dst_tr_rect;
 
-        let src_m_rect = Rect::new(4, 4, 39, 7);
-        let dst_m_rect = Rect::new(x + 4, y + 4, width - 7, height - 7);
+        let src_l_rect;
+        let dst_l_rect;
 
-        let src_r_rect = Rect::new(43, 4, 4, 7);
-        let dst_r_rect = Rect::new(x + width as i32 - 3, y + 4, 4, height - 7);
+        let src_m_rect;
+        let dst_m_rect;
 
-        let src_bl_rect = Rect::new(0, 11, 4, 4);
-        let dst_bl_rect = Rect::new(x, y + height as i32 - 3, 4, 4);
+        let src_r_rect;
+        let dst_r_rect;
 
-        let src_bm_rect = Rect::new(4, 11, 39, 4);
-        let dst_bm_rect = Rect::new(x + 4, y + height as i32 - 3, width - 7, 4);
+        let src_bl_rect;
+        let dst_bl_rect;
 
-        let src_br_rect = Rect::new(43, 11, 4, 4);
-        let dst_br_rect = Rect::new(x + width as i32 - 3, y + height as i32 - 3, 4, 4);
-    
+        let src_bm_rect;
+        let dst_bm_rect;
+
+        let src_br_rect;
+        let dst_br_rect;
+
+        if mx >= x && mx <= x + width as i32 && my >= y && my <= y + height as i32 && is_button_clicked {
+            text_offset = 2;
+            button_offset = 15;
+        } else {
+            text_offset = 0;
+            button_offset = 0;
+        }
+
+        src_tl_rect = Rect::new(0, 0 + button_offset, 4, 4); // src image
+        dst_tl_rect = Rect::new(x, y, 4, 4); // dest image
+
+        src_tm_rect = Rect::new(4, 0 + button_offset, 39, 4);
+        dst_tm_rect = Rect::new(x + 4, y, width - 7, 4);
+
+        src_tr_rect = Rect::new(43, 0 + button_offset, 4, 4);
+        dst_tr_rect = Rect::new(x + width as i32 - 3, y, 4, 4);
+
+        src_l_rect = Rect::new(0, 4 + button_offset, 4, 7);
+        dst_l_rect = Rect::new(x, y + 4, 4, height - 7);
+
+        src_m_rect = Rect::new(4, 4 + button_offset, 39, 7);
+        dst_m_rect = Rect::new(x + 4, y + 4, width - 7, height - 7);
+
+        src_r_rect = Rect::new(43, 4 + button_offset, 4, 7);
+        dst_r_rect = Rect::new(x + width as i32 - 3, y + 4, 4, height - 7);
+
+        src_bl_rect = Rect::new(0, 11 + button_offset, 4, 4);
+        dst_bl_rect = Rect::new(x, y + height as i32 - 3, 4, 4);
+
+        src_bm_rect = Rect::new(4, 11 + button_offset, 39, 4);
+        dst_bm_rect = Rect::new(x + 4, y + height as i32 - 3, width - 7, 4);
+
+        src_br_rect = Rect::new(43, 11 + button_offset, 4, 4);
+        dst_br_rect = Rect::new(x + width as i32 - 3, y + height as i32 - 3, 4, 4);
+
+        target = Rect::new(text_x + text_offset, text_y + text_offset, text_width, text_height);
+
         // Copy the specified part of the image to the canvas
         canvas.copy(&image_texture, src_tl_rect, dst_tl_rect)?;
         canvas.copy(&image_texture, src_tm_rect, dst_tm_rect)?;
@@ -325,7 +368,7 @@ pub fn tab(
     let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
     let target = Rect::new(x + 10, y + 3, text_width, text_height);
 
-    canvas.set_draw_color(cgenex[5]);
+    canvas.set_draw_color(cgenex[9]);
     let rect = Rect::new(x, y, text_width + 20, text_height + 7);
     canvas.draw_rect(rect).unwrap();
     canvas.set_draw_color(cgenex[10]);

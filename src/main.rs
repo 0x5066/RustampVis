@@ -619,6 +619,9 @@ fn draw_window(
     oscstyle: &str,
     mode: u8,
     image_path: &str,
+    is_button_clicked: bool,
+    mx: i32,
+    my: i32,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
 
@@ -677,7 +680,7 @@ fn draw_window(
     slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, 5)?;
     slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, 5)?;
 
-    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path)?;
+    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, mx, my)?;
 
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
@@ -746,6 +749,9 @@ fn main() -> Result<(), String> {
         bargrav: barfo as f64 / 3.0,
     }; NUM_BARS];
 
+    let mut mouse_x: i32 = 0;
+    let mut mouse_y: i32 = 0;
+
     // set up sdl2
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
@@ -764,7 +770,6 @@ fn main() -> Result<(), String> {
         .unwrap();
     let mut canvas = window.into_canvas().build().unwrap();
 
-    //this is also new
     let mut canvas2 = window2.into_canvas().build().unwrap();
     let ttf_context = sdl2::ttf::init().unwrap();
     let texture_creator = canvas2.texture_creator();
@@ -801,6 +806,7 @@ fn main() -> Result<(), String> {
 
     let image_path = "gen_ex.png";
     let genex_colors = genex(image_path);
+    let mut is_button_clicked = false;
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -840,6 +846,26 @@ fn main() -> Result<(), String> {
                     mode = (mode + 1) % 3;
                     //println!("{mode}")
                 }
+                Event::MouseMotion { window_id: 2, x, y, .. } => {
+                    // Handle mouse motion events
+                    println!("Mouse moved to ({}, {})", x, y);
+                }
+                Event::MouseButtonDown { window_id: 2, mouse_btn, x, y, .. } => {
+                    // Handle mouse button down events
+                    if mouse_btn == sdl2::mouse::MouseButton::Left {
+                        is_button_clicked = true;
+                        mouse_x = x;
+                        mouse_y = y;
+                    }
+                }
+                Event::MouseButtonUp { window_id: 2, mouse_btn, x, y, .. } => {
+                    // Handle mouse button down events
+                    if mouse_btn == sdl2::mouse::MouseButton::Left {
+                        is_button_clicked = false;
+                        mouse_x = x;
+                        mouse_y = y;
+                    }
+                }
                 _ => {}
             }
         }
@@ -859,7 +885,7 @@ fn main() -> Result<(), String> {
 
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path)?;
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path, is_button_clicked, mouse_x, mouse_y)?;
 
         // draw the cool shit
         canvas.present();
