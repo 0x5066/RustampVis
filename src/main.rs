@@ -30,15 +30,16 @@ use image::GenericImageView;
 mod viscolors;
 mod comctl;
 
-use crate::comctl::listview_box;
-use crate::comctl::groupbox;
-use crate::comctl::render_text;
-use crate::comctl::newline_handler;
-use crate::comctl::draw_dropdown;
-use crate::comctl::checkbox;
-use crate::comctl::slider_small;
-use crate::comctl::tab;
-use crate::comctl::button;
+use comctl::listview_box;
+use comctl::groupbox;
+use comctl::render_text;
+use comctl::newline_handler;
+use comctl::draw_dropdown;
+use comctl::checkbox;
+use comctl::slider_small;
+use comctl::tab;
+use comctl::button;
+use comctl::radiobutton;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
@@ -90,6 +91,10 @@ struct Args {
     /// Set analyzer fall off, ranging from 1 - 5
     #[arg(long, default_value = "2")]
     barfo: u8,
+
+    /// Enable/Disable peaks
+    #[arg(long, default_value = "1")]
+    peaks: u8,
 }
 
 #[derive(Copy)]
@@ -255,7 +260,9 @@ fn draw_visualizer(
     zoom: i32,
     bars: &mut [Bar],
     peakfo: u8,
+    peaks: Arc<Mutex<u8>>,
 ) {
+    let peaks_unlocked = peaks.lock().unwrap();
     let xs: Vec<i32> = (0..75).collect();
     let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
     let fft: Vec<f64> = fft.iter()
@@ -390,7 +397,11 @@ fn draw_visualizer(
             );
             let color = peak_color;
             canvas.set_draw_color(color);
-            canvas.fill_rect(rect).unwrap();
+            if *peaks_unlocked == 1 {
+                canvas.fill_rect(rect).unwrap();
+            } else {
+                println!("SORRY NOTHING");
+            }
 	}
         // Define the spacing between vertical lines (every 4th place).
         let line_spacing = 4;
@@ -622,6 +633,9 @@ fn draw_window(
     is_button_clicked: bool,
     mx: i32,
     my: i32,
+    peaks: Arc<Mutex<u8>>,
+    specdraw: &str,
+    bandwidth: &str,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
 
@@ -675,13 +689,18 @@ fn draw_window(
     render_text(canvas, font, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
     render_text(canvas, font, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
 
-    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator)?;
+    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks, is_button_clicked, mx, my)?;
 
     slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, 5)?;
     slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, 5)?;
 
     button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, mx, my)?;
 
+    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw, is_button_clicked, mx, my)?;
+
+    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth, is_button_clicked, mx, my)?;
+
+    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle, is_button_clicked, mx, my)?;
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
 
@@ -728,6 +747,7 @@ fn main() -> Result<(), String> {
     let mut bandwidth = args.bandwidth.as_str();
     let mut peakfo = args.peakfo;
     let mut barfo = args.barfo;
+    let mut peaks = Arc::new(Mutex::new(args.peaks));
 
     if args.peakfo <= 1 {
         peakfo = 1;
@@ -884,8 +904,8 @@ fn main() -> Result<(), String> {
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path, is_button_clicked, mouse_x, mouse_y)?;
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo, peaks.clone()/* , modern*/);
+        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path, is_button_clicked, mouse_x, mouse_y, peaks.clone(), specdraw, &bandwidth)?;
 
         // draw the cool shit
         canvas.present();

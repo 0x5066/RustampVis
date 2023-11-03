@@ -8,6 +8,8 @@ use sdl2::render::TextureCreator;
 use sdl2::rect::Point;
 use sdl2::image::LoadTexture;
 
+use std::sync::{Arc, Mutex};
+
 pub fn newline_handler<'a>(
     text: &'a str,
     font: &'a Font<'a, 'a>,
@@ -163,7 +165,12 @@ pub fn checkbox(
     font: &sdl2::ttf::Font,
     marlett: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
+    item: Arc<Mutex<u8>>,
+    is_button_clicked: bool,
+    mx: i32,
+    my: i32,
 ) -> Result<(), String> {
+    let mut item_value = item.lock().unwrap();
     canvas.set_draw_color(cgenex[5]);
     let border_rect = Rect::new(x, y, 13, 13);
     canvas.draw_rect(border_rect)?;
@@ -174,7 +181,16 @@ pub fn checkbox(
 
     render_text(canvas, font, text, cgenex[4], x + 17, y, texture_creator)?;
 
-    render_text(canvas, marlett, "b", cgenex[1], x - 1, y, texture_creator)?;
+
+    if mx >= x && mx <= x + 13 as i32 && my >= y && my <= y + 13 as i32 && is_button_clicked {
+        // Toggle item_value between 0 and 1
+        *item_value = 1 - *item_value;
+    }
+
+    // Render text based on the updated item_value
+    if *item_value == 1 {
+        render_text(canvas, marlett, "b", cgenex[1], x - 1, y, texture_creator)?;
+    }
 
     Ok(())
 }
@@ -379,3 +395,50 @@ pub fn tab(
 
     Ok(())
 }
+
+pub fn radiobutton(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cgenex: &[Color],
+    x: i32,
+    y: i32,
+    options_str: &str,
+    font: &sdl2::ttf::Font,
+    marlett: &sdl2::ttf::Font,
+    texture_creator: &TextureCreator<WindowContext>,
+    selected_option: &str, // Pass a mutable reference to update the selected option
+    is_button_clicked: bool,
+    mx: i32,
+    my: i32,
+) -> Result<(), String> {
+    let options: Vec<&str> = options_str.split(';').collect();
+    //let mut selected_option_value = selected_option.lock().unwrap();
+    let mut current_x = x + 10;
+
+    for option in &options {
+
+        //let radio_button_rect = Rect::new(current_x - 20, y, option_text_width, option_text_height);
+
+        /*if radio_button_rect.contains_point(Point::new(mx, my)) && is_button_clicked {
+            *selected_option_value = &option.to_string();
+        }*/
+
+        if selected_option == option.to_string().to_lowercase() {
+            render_text(canvas, marlett, "n", cgenex[0], current_x - 20, y, texture_creator)?;
+            render_text(canvas, marlett, "l", cgenex[5], current_x - 20, y, texture_creator)?;
+            render_text(canvas, marlett, "m", cgenex[5], current_x - 20, y, texture_creator)?;
+            render_text(canvas, marlett, "i", cgenex[1], current_x - 20, y, texture_creator)?;
+        } else {
+            render_text(canvas, marlett, "n", cgenex[0], current_x - 20, y, texture_creator)?;
+            render_text(canvas, marlett, "l", cgenex[5], current_x - 20, y, texture_creator)?;
+            render_text(canvas, marlett, "m", cgenex[5], current_x - 20, y, texture_creator)?;
+        }
+
+        // Render the option text
+        render_text(canvas, font, option, cgenex[4], current_x, y, texture_creator)?;
+
+        current_x += 90; // Adjust this value to control the spacing between radio buttons and text
+    }
+
+    Ok(())
+}
+
