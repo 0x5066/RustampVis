@@ -199,7 +199,7 @@ pub fn slider_small(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     cgenex: &[Color],
     width: u32,
-    height: u32,
+    _height: u32,
     x: i32,
     y: i32,
     text: &str,
@@ -405,24 +405,20 @@ pub fn radiobutton(
     font: &sdl2::ttf::Font,
     marlett: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
-    selected_option: &str, // Pass a mutable reference to update the selected option
+    selected_option: Arc<Mutex<String>>,
     is_button_clicked: bool,
     mx: i32,
     my: i32,
 ) -> Result<(), String> {
     let options: Vec<&str> = options_str.split(';').collect();
-    //let mut selected_option_value = selected_option.lock().unwrap();
     let mut current_x = x + 10;
 
     for option in &options {
+        let mut selected_option_value = selected_option.lock().unwrap();
+        let option_lowercase = option.to_string().to_lowercase();
 
-        //let radio_button_rect = Rect::new(current_x - 20, y, option_text_width, option_text_height);
-
-        /*if radio_button_rect.contains_point(Point::new(mx, my)) && is_button_clicked {
-            *selected_option_value = &option.to_string();
-        }*/
-
-        if selected_option == option.to_string().to_lowercase() {
+        // Render radio button and option text based on the selected option
+        if *selected_option_value == option_lowercase {
             render_text(canvas, marlett, "n", cgenex[0], current_x - 20, y, texture_creator)?;
             render_text(canvas, marlett, "l", cgenex[5], current_x - 20, y, texture_creator)?;
             render_text(canvas, marlett, "m", cgenex[5], current_x - 20, y, texture_creator)?;
@@ -434,7 +430,21 @@ pub fn radiobutton(
         }
 
         // Render the option text
-        render_text(canvas, font, option, cgenex[4], current_x, y, texture_creator)?;
+        let surface = font.render(option).solid(cgenex[4]).map_err(|e| e.to_string())?;
+        let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+        let (text_width, text_height) = font.size_of(option).map_err(|e| e.to_string())?;
+        let target = Rect::new(current_x, y, text_width, text_height);
+        canvas.copy(&texture, None, Some(target))?;
+
+        // Check if the mouse is over the radio button
+        let radio_button_rect = Rect::new(current_x - 20, y, 20 + text_width, 16);
+        if radio_button_rect.contains_point(Point::new(mx, my)) {
+            // Handle click
+            if is_button_clicked {
+                *selected_option_value = option_lowercase.clone();
+                //println!("Click");
+            }
+        }
 
         current_x += 90; // Adjust this value to control the spacing between radio buttons and text
     }

@@ -145,28 +145,28 @@ fn apply_weighting(spectrum: &mut [Complex<f32>], frequencies: &[f32]) {
     }
 }
 
-fn switch_oscstyle(oscstyle: &mut &str) {
-    match *oscstyle {
-        "dots" => *oscstyle = "lines",
-        "lines" => *oscstyle = "solid",
-        "solid" => *oscstyle = "dots",
+fn switch_oscstyle(oscstyle: &mut String) {
+    match oscstyle.as_str() { // Convert the String to &str for matching
+        "dots" => *oscstyle = "lines".to_string(),
+        "lines" => *oscstyle = "solid".to_string(),
+        "solid" => *oscstyle = "dots".to_string(),
         _ => println!("Invalid oscilloscope style. Supported styles: dots, lines, solid."),
     }
 }
 
-fn switch_specstyle(specdraw: &mut &str) {
-    match *specdraw {
-        "normal" => *specdraw = "fire",
-        "fire" => *specdraw = "line",
-        "line" => *specdraw = "normal",
+fn switch_specstyle(specdraw: &mut String) {
+    match specdraw.as_str() { // Convert the String to &str for matching
+        "normal" => *specdraw = "fire".to_string(),
+        "fire" => *specdraw = "line".to_string(),
+        "line" => *specdraw = "normal".to_string(),
         _ => println!("Invalid analyzer style. Supported styles: normal, fire, line."),
     }
 }
 
-fn switch_bandwidth(bandwidth: &mut &str){
-    match *bandwidth {
-        "thick" => *bandwidth = "thin",
-        "thin" => *bandwidth = "thick",
+fn switch_bandwidth(bandwidth: &mut String) {
+    match bandwidth.as_str() { // Convert the String to &str for matching
+        "thick" => *bandwidth = "thin".to_string(),
+        "thin" => *bandwidth = "thick".to_string(),
         _ => println!("Invalid bandwidth. Supported bandwidths: thick, thin."),
     }
 }
@@ -627,17 +627,20 @@ fn draw_window(
     texture_creator: &TextureCreator<WindowContext>,
     font: &sdl2::ttf::Font,
     marlett: &sdl2::ttf::Font,
-    oscstyle: &str,
+    oscstyle: Arc<Mutex<String>>,
     mode: u8,
     image_path: &str,
     is_button_clicked: bool,
     mx: i32,
     my: i32,
     peaks: Arc<Mutex<u8>>,
-    specdraw: &str,
-    bandwidth: &str,
+    specdraw: Arc<Mutex<String>>,
+    bandwidth: Arc<Mutex<String>>,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
+/*     let specdraw_mutex = Arc::new(Mutex::new(specdraw.to_string()));
+    let oscstyle_mutex = Arc::new(Mutex::new(oscstyle.to_string()));
+    let bandwidth_mutex = Arc::new(Mutex::new(bandwidth.to_string())); */
 
     if mode == 0 {
         visstatus = "Spectrum Analyzer".to_string();
@@ -739,15 +742,15 @@ fn main() -> Result<(), String> {
     };
     
     // handle args
-    let mut oscstyle = args.oscstyle.as_str(); // Convert String to &str
-    let mut specdraw = args.specdraw.as_str();
+    let oscstyle = Arc::new(Mutex::new(args.oscstyle)); // Convert String to &str
+    let specdraw = Arc::new(Mutex::new(args.specdraw));
     let zoom = args.zoom;
     let amp = args.amp;
     let mut mode = args.mode;
-    let mut bandwidth = args.bandwidth.as_str();
+    let bandwidth = Arc::new(Mutex::new(args.bandwidth));
     let mut peakfo = args.peakfo;
     let mut barfo = args.barfo;
-    let mut peaks = Arc::new(Mutex::new(args.peaks));
+    let peaks = Arc::new(Mutex::new(args.peaks));
 
     if args.peakfo <= 1 {
         peakfo = 1;
@@ -793,8 +796,28 @@ fn main() -> Result<(), String> {
     let mut canvas2 = window2.into_canvas().build().unwrap();
     let ttf_context = sdl2::ttf::init().unwrap();
     let texture_creator = canvas2.texture_creator();
-    let mut font = ttf_context.load_font(&"font/tahoma.ttf", 11)?;
-    let mut vectorgfx = ttf_context.load_font(&"font/marlett.ttf", 15)?;
+    let font_path: &str;
+    let vectorgfx_path: &str;
+    let vectorgfx_size: u16;
+    
+    if cfg!(windows) {
+        font_path = "C:\\Windows\\fonts\\tahoma.ttf";
+        vectorgfx_path = "C:\\Windows\\fonts\\marlett.ttf";
+        vectorgfx_size = 15;
+    } else if cfg!(unix) {
+        font_path = "font/tahoma.ttf";
+        vectorgfx_path = "font/marlett.ttf";
+        vectorgfx_size = 15;
+    } else {
+        // Handle the case where neither windows nor unix is the configuration
+        return Err("Unsupported platform".to_string());
+    }
+    
+    let mut font = ttf_context.load_font(font_path, 11)
+        .map_err(|err| format!("failed to load font: {}", err))?;
+    let mut vectorgfx = ttf_context.load_font(vectorgfx_path, vectorgfx_size)
+        .map_err(|err| format!("failed to load vector graphics font: {}", err))?;
+    
     font.set_hinting(sdl2::ttf::Hinting::Mono);
     vectorgfx.set_hinting(sdl2::ttf::Hinting::Mono);
 
@@ -849,27 +872,30 @@ fn main() -> Result<(), String> {
                 }
                 Event::KeyDown { window_id: 1, keycode: Some(Keycode::B), .. } => {
                     // switch bandwidth
-                    if bandwidth == "thick"{
-                        switch_bandwidth(&mut bandwidth);
-                    } else if bandwidth == "thin" {
-                        switch_bandwidth(&mut bandwidth);
+                    let mut bandwidth = bandwidth.lock().unwrap();
+                    if *bandwidth == "thick" {
+                        switch_bandwidth(&mut *bandwidth);
+                    } else if *bandwidth == "thin" {
+                        switch_bandwidth(&mut *bandwidth);
                     }
                 }
                 Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Right, .. } => {
-                    if mode == 1{
-                        switch_oscstyle(&mut oscstyle);
+                    let mut oscstyle = oscstyle.lock().unwrap();
+                    let mut specdraw = specdraw.lock().unwrap();
+                    if mode == 1 {
+                        switch_oscstyle(&mut *oscstyle);
                     } else if mode == 0 {
-                        switch_specstyle(&mut specdraw);
+                        switch_specstyle(&mut *specdraw);
                     }
                 }
                 Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Left, .. } => {
                     mode = (mode + 1) % 3;
                     //println!("{mode}")
                 }
-                Event::MouseMotion { window_id: 2, x, y, .. } => {
+/*                 Event::MouseMotion { window_id: 2, x, y, .. } => {
                     // Handle mouse motion events
-                    println!("Mouse moved to ({}, {})", x, y);
-                }
+                    //println!("Mouse moved to ({}, {})", x, y);
+                } */
                 Event::MouseButtonDown { window_id: 2, mouse_btn, x, y, .. } => {
                     // Handle mouse button down events
                     if mouse_btn == sdl2::mouse::MouseButton::Left {
@@ -904,8 +930,25 @@ fn main() -> Result<(), String> {
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, oscstyle, specdraw, mode, &bandwidth, zoom, &mut bars, peakfo, peaks.clone()/* , modern*/);
-        draw_window(&mut canvas2, &viscolors, &genex_colors, &texture_creator, &font, &vectorgfx, oscstyle, mode, image_path, is_button_clicked, mouse_x, mouse_y, peaks.clone(), specdraw, &bandwidth)?;
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, peakfo, peaks.clone());
+        draw_window(
+            &mut canvas2,
+            &viscolors,
+            &genex_colors,
+            &texture_creator,
+            &font,
+            &vectorgfx,
+            oscstyle.clone(),
+            mode,
+            image_path,
+            is_button_clicked,
+            mouse_x,
+            mouse_y,
+            peaks.clone(),
+            specdraw.clone(),
+            bandwidth.clone(),
+        )?;
+        
 
         // draw the cool shit
         canvas.present();
