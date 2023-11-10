@@ -159,16 +159,16 @@ pub fn draw_dropdown(
 pub fn checkbox(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     cgenex: &[Color],
-    x: i32,
-    y: i32,
+    mut x: i32,
+    mut y: i32,
     text: &str,
     font: &sdl2::ttf::Font,
     marlett: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
     item: Arc<Mutex<u8>>,
     is_button_clicked: bool,
-    mx: i32,
-    my: i32,
+    mx: &mut i32,
+    my: &mut i32,
 ) -> Result<(), String> {
     let mut item_value = item.lock().unwrap();
     canvas.set_draw_color(cgenex[5]);
@@ -182,7 +182,7 @@ pub fn checkbox(
     render_text(canvas, font, text, cgenex[4], x + 17, y, texture_creator)?;
 
 
-    if mx >= x && mx <= x + 13 as i32 && my >= y && my <= y + 13 as i32 && is_button_clicked {
+    if mx >= &mut x && mx <= &mut (x + 13 as i32) && my >= &mut y && my <= &mut (y + 13 as i32) && is_button_clicked {
         // Toggle item_value between 0 and 1
         *item_value = 1 - *item_value;
     }
@@ -200,15 +200,27 @@ pub fn slider_small(
     cgenex: &[Color],
     width: u32,
     _height: u32,
-    x: i32,
+    mut x: i32,
     y: i32,
     text: &str,
     font: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
+    current_value: &mut u8,
     max_value: i32,
+    image_path: &str,
+    is_button_clicked: bool,
+    mx: &mut i32,
+    my: &mut i32,
 ) -> Result<(), String> {
 
+/*     let current_value_unlocked = match current_value.try_lock() {
+        Ok(value) => value,
+        Err(_) => return Err("Failed to acquire the lock on current_value".to_string()),
+    }; */
+
     render_text(canvas, font, text, cgenex[4], x, y, texture_creator)?;
+
+    let indicator_x = x + 3 + ((*current_value as i32 - 1) * (width - 4) as i32 / (max_value - 1)) as i32;
 
     canvas.set_draw_color(cgenex[10]);
     canvas.draw_line(Point::new(x+2, y+25), Point::new(x + width as i32 - 2, y+25)).unwrap();
@@ -226,15 +238,34 @@ pub fn slider_small(
     canvas.draw_line(Point::new(x + width as i32 - 2, y+27), Point::new(x + width as i32 - 2, y+26)).unwrap();
     //canvas.draw_line(Point::new(x+2, y+25), Point::new(x + 2, y+27)).unwrap();
 
-    for i in 0..=max_value {
-        let line_x = x + (i as f32 / max_value as f32 * (width - 6) as f32) as i32 + 3;
+    let button_width = 48;
+    let button_height = 16;
+    
+    for i in 0..max_value {
+        let line_x = x + 3 + (i as f32 / (max_value - 1) as f32 * (width - 5) as f32) as i32;
         canvas.set_draw_color(cgenex[4]);
         canvas.draw_line(Point::new(line_x, y + 34), Point::new(line_x, y + 36)).unwrap();
     }
+
+    if mx >= &mut x && mx <= &mut (x + width as i32) &&
+    my >= &mut (y + 19) && my <= &mut (y + 19 + button_height) &&
+    is_button_clicked
+    {
+        // Update current_value based on mouse position
+        *current_value = (((*mx - x - button_width / 2) as f32 / (width - button_width as u32) as f32) * (max_value - 1) as f32 + 1.0) as u8;
+        if *current_value == 0{
+            *current_value = 1;
+        } else if *current_value == 6 {
+            *current_value = 5;
+        }
+        //println!("Inside, mx {}, x {}, value {current_value}", mx, x);
+    }
+    
+    // Draw the slider indicator
+    sliderbutton(canvas, indicator_x - 4, y + 19, 8, 16, texture_creator, image_path, is_button_clicked, mx, my)?;
     
     Ok(())
 }
-
 
 pub fn button(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
@@ -364,6 +395,97 @@ pub fn button(
         canvas.copy(&image_texture, src_br_rect, dst_br_rect)?;
 
     canvas.copy(&texture, None, Some(target))?;
+    Ok(())
+}
+
+fn sliderbutton(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    mut x: i32,
+    mut y: i32,
+    width: u32,
+    height: u32,
+    texture_creator: &TextureCreator<WindowContext>,
+    image_path: &str,
+    is_button_clicked: bool,
+    mx: &mut i32,
+    my: &mut i32,
+) -> Result<(), String> {
+
+    let image_texture = texture_creator.load_texture(image_path)?;
+
+        // Define the source and destination rectangles to copy a piece of the image
+        let button_offset: i32;
+
+        let src_tl_rect;
+        let dst_tl_rect;
+
+        let src_tm_rect;
+        let dst_tm_rect;
+
+        let src_tr_rect;
+        let dst_tr_rect;
+
+        let src_l_rect;
+        let dst_l_rect;
+
+        let src_m_rect;
+        let dst_m_rect;
+
+        let src_r_rect;
+        let dst_r_rect;
+
+        let src_bl_rect;
+        let dst_bl_rect;
+
+        let src_bm_rect;
+        let dst_bm_rect;
+
+        let src_br_rect;
+        let dst_br_rect;
+
+        if mx >= &mut x && mx <= &mut (x + width as i32) && my >= &mut y && my <= &mut (y + height as i32) && is_button_clicked {
+            button_offset = 15;
+        } else {
+            button_offset = 0;
+        }
+
+        src_tl_rect = Rect::new(0, 0 + button_offset, 4, 4); // src image
+        dst_tl_rect = Rect::new(x, y, 4, 4); // dest image
+
+        src_tm_rect = Rect::new(4, 0 + button_offset, 39, 4);
+        dst_tm_rect = Rect::new(x + 4, y, width - 7, 4);
+
+        src_tr_rect = Rect::new(43, 0 + button_offset, 4, 4);
+        dst_tr_rect = Rect::new(x + width as i32 - 3, y, 4, 4);
+
+        src_l_rect = Rect::new(0, 4 + button_offset, 4, 7);
+        dst_l_rect = Rect::new(x, y + 4, 4, height - 7);
+
+        src_m_rect = Rect::new(4, 4 + button_offset, 39, 7);
+        dst_m_rect = Rect::new(x + 4, y + 4, width - 7, height - 7);
+
+        src_r_rect = Rect::new(43, 4 + button_offset, 4, 7);
+        dst_r_rect = Rect::new(x + width as i32 - 3, y + 4, 4, height - 7);
+
+        src_bl_rect = Rect::new(0, 11 + button_offset, 4, 4);
+        dst_bl_rect = Rect::new(x, y + height as i32 - 3, 4, 4);
+
+        src_bm_rect = Rect::new(4, 11 + button_offset, 39, 4);
+        dst_bm_rect = Rect::new(x + 4, y + height as i32 - 3, width - 7, 4);
+
+        src_br_rect = Rect::new(43, 11 + button_offset, 4, 4);
+        dst_br_rect = Rect::new(x + width as i32 - 3, y + height as i32 - 3, 4, 4);
+
+        // Copy the specified part of the image to the canvas
+        canvas.copy(&image_texture, src_tl_rect, dst_tl_rect)?;
+        canvas.copy(&image_texture, src_tm_rect, dst_tm_rect)?;
+        canvas.copy(&image_texture, src_tr_rect, dst_tr_rect)?;
+        canvas.copy(&image_texture, src_l_rect, dst_l_rect)?;
+        canvas.copy(&image_texture, src_m_rect, dst_m_rect)?;
+        canvas.copy(&image_texture, src_r_rect, dst_r_rect)?;
+        canvas.copy(&image_texture, src_bl_rect, dst_bl_rect)?;
+        canvas.copy(&image_texture, src_bm_rect, dst_bm_rect)?;
+        canvas.copy(&image_texture, src_br_rect, dst_br_rect)?;
     Ok(())
 }
 

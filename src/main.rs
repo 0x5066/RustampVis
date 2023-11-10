@@ -183,7 +183,7 @@ fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     y0 + (x - x0) * (y1 - y0) / (x1 - x0)
 }
 
-fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8) {
+fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8, barfo: u8) {
     if bandwidth == "thick" {
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
@@ -225,7 +225,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
     }
 
     for i in 0..NUM_BARS {
-        bars[i].height2 -= bars[i].bargrav;
+        bars[i].height2 -= bars[i].bargrav + barfo as f64 / 4.0;
 
         if bars[i].height2 <= bars[i].height {
             bars[i].height2 = bars[i].height;
@@ -260,6 +260,7 @@ fn draw_visualizer(
     zoom: i32,
     bars: &mut [Bar],
     peakfo: u8,
+    barfo: u8,
     peaks: Arc<Mutex<u8>>,
 ) {
     let peaks_unlocked = peaks.lock().unwrap();
@@ -274,7 +275,7 @@ fn draw_visualizer(
     let mut bottom: i32;
 
     // analyzer stuff
-    process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo);
+    process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo, barfo);
 
     for x in 0..75 {
         for y in 0..16 {
@@ -352,18 +353,13 @@ fn draw_visualizer(
             let x = i as i32 * zoom as i32;
             let y = -bar.height2 as i32 + 15;
             
-            if y >= 16{
-                top = 17;
-                bottom = y;
-            } else {
                 top = y + 1;
                 bottom = 16;
-            }
 
             for dy in top..=bottom {
                 let color_index: usize;
                 if specdraw == "normal"{
-                    color_index = (dy as usize + 2) % _colors.len();
+                    color_index = (dy as usize).wrapping_add(2) % _colors.len();
                 } else if specdraw == "fire" {
                     color_index = (dy as usize).wrapping_sub(y as usize).wrapping_add(2) % _colors.len();
                 } else if specdraw == "line" {
@@ -400,7 +396,7 @@ fn draw_visualizer(
             if *peaks_unlocked == 1 {
                 canvas.fill_rect(rect).unwrap();
             } else {
-                println!("SORRY NOTHING");
+                //println!("SORRY NOTHING");
             }
 	}
         // Define the spacing between vertical lines (every 4th place).
@@ -631,11 +627,13 @@ fn draw_window(
     mode: u8,
     image_path: &str,
     is_button_clicked: bool,
-    mx: i32,
-    my: i32,
+    mx: &mut i32,
+    my: &mut i32,
     peaks: Arc<Mutex<u8>>,
     specdraw: Arc<Mutex<String>>,
     bandwidth: Arc<Mutex<String>>,
+    mut peakfo: &mut u8,
+    mut barfo: &mut u8,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
 /*     let specdraw_mutex = Arc::new(Mutex::new(specdraw.to_string()));
@@ -694,16 +692,16 @@ fn draw_window(
 
     checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks, is_button_clicked, mx, my)?;
 
-    slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, 5)?;
-    slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, 5)?;
+    slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
+    slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
 
-    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, mx, my)?;
+    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw, is_button_clicked, mx, my)?;
+    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw, is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth, is_button_clicked, mx, my)?;
+    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth, is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle, is_button_clicked, mx, my)?;
+    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle, is_button_clicked, *mx, *my)?;
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
 
@@ -748,20 +746,23 @@ fn main() -> Result<(), String> {
     let amp = args.amp;
     let mut mode = args.mode;
     let bandwidth = Arc::new(Mutex::new(args.bandwidth));
-    let mut peakfo = args.peakfo;
-    let mut barfo = args.barfo;
+    let peakfo = Arc::new(Mutex::new(args.peakfo));
+    let barfo = Arc::new(Mutex::new(args.barfo));
     let peaks = Arc::new(Mutex::new(args.peaks));
 
+    let mut peakfo_unlocked = peakfo.lock().unwrap();
+    let mut barfo_unlocked = barfo.lock().unwrap();
+
     if args.peakfo <= 1 {
-        peakfo = 1;
+        *peakfo_unlocked = 1;
     } else if args.peakfo >= 5 {
-        peakfo = 5;
+        *peakfo_unlocked = 5;
     }
 
     if args.barfo <= 1 {
-        barfo = 1;
+        *barfo_unlocked = 1;
     } else if args.barfo >= 5 {
-        barfo = 5;
+        *barfo_unlocked = 5;
     }
 
     let mut bars = [Bar {
@@ -769,7 +770,7 @@ fn main() -> Result<(), String> {
         height2: 0.0,
         peak: 0.0,
         gravity: 0.0,
-        bargrav: barfo as f64 / 3.0,
+        bargrav: 0.0, /* *barfo_unlocked as f64 / 3.0*/
     }; NUM_BARS];
 
     let mut mouse_x: i32 = 0;
@@ -892,24 +893,23 @@ fn main() -> Result<(), String> {
                     mode = (mode + 1) % 3;
                     //println!("{mode}")
                 }
-/*                 Event::MouseMotion { window_id: 2, x, y, .. } => {
+                Event::MouseMotion { window_id: 2, x, y, .. } => {
+                    mouse_x = x;
+                    mouse_y = y;
                     // Handle mouse motion events
                     //println!("Mouse moved to ({}, {})", x, y);
-                } */
-                Event::MouseButtonDown { window_id: 2, mouse_btn, x, y, .. } => {
+                }
+                Event::MouseButtonDown { window_id: 2, mouse_btn, x: _, y: _, .. } => {
                     // Handle mouse button down events
                     if mouse_btn == sdl2::mouse::MouseButton::Left {
                         is_button_clicked = true;
-                        mouse_x = x;
-                        mouse_y = y;
+                        //println!("{:?} {:?}", barfo_unlocked, peakfo_unlocked);
                     }
                 }
-                Event::MouseButtonUp { window_id: 2, mouse_btn, x, y, .. } => {
+                Event::MouseButtonUp { window_id: 2, mouse_btn, x: _, y: _, .. } => {
                     // Handle mouse button down events
                     if mouse_btn == sdl2::mouse::MouseButton::Left {
                         is_button_clicked = false;
-                        mouse_x = x;
-                        mouse_y = y;
                     }
                 }
                 _ => {}
@@ -930,7 +930,7 @@ fn main() -> Result<(), String> {
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, peakfo, peaks.clone());
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone());
         draw_window(
             &mut canvas2,
             &viscolors,
@@ -942,11 +942,13 @@ fn main() -> Result<(), String> {
             mode,
             image_path,
             is_button_clicked,
-            mouse_x,
-            mouse_y,
+            &mut mouse_x,
+            &mut mouse_y,
             peaks.clone(),
             specdraw.clone(),
             bandwidth.clone(),
+            &mut *peakfo_unlocked,
+            &mut *barfo_unlocked,
         )?;
         
 
