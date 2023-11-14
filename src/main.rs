@@ -69,8 +69,8 @@ struct Args {
     zoom: i32,
 
     /// Amplify the incoming signal
-    #[arg(short, long, default_value = "1.0")]
-    amp: f32,
+    #[arg(short, long, default_value = "1")]
+    amp: u8,
 
     /// Specify the visualization mode to use
     #[arg(short, long, default_value = "0")]
@@ -85,11 +85,11 @@ struct Args {
     modern: bool,*/
 
     /// Set peak fall off, ranging from 1 - 5
-    #[arg(long, default_value = "3")]
+    #[arg(long, default_value = "2")]
     peakfo: u8,
 
     /// Set analyzer fall off, ranging from 1 - 5
-    #[arg(long, default_value = "2")]
+    #[arg(long, default_value = "3")]
     barfo: u8,
 
     /// Enable/Disable peaks
@@ -184,13 +184,24 @@ fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
 }
 
 fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8, barfo: u8) {
+    //print!("{}", barfo as f64 / 2.75);
+    let mut bvalue: f64 = 0.0;
+    let mut pvalue: f64 = 0.0;
+    if cfg!(windows) {
+        bvalue = (barfo as f64 / 2.75) / 2.0;
+        pvalue = ((1.0 / 512.0) * (peakfo as f64)) / 2.0;
+    }
+    else {
+        bvalue = barfo as f64 / 2.75;
+        pvalue = (1.0 / 512.0) * (peakfo as f64);
+    }
     if bandwidth == "thick" {
         for bars_chunk in bars.chunks_mut(4) {
             let mut sum = 0.0;
 
             for _ in 0..24 * 2 {
                 if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 9.0;
+                    sum += *fft_value as f64;
                 } else {
                     break;
                 }
@@ -209,7 +220,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
 
             for _ in 0..6 * 2 {
                 if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64 + 9.0;
+                    sum += *fft_value as f64;
                 } else {
                     break;
                 }
@@ -225,7 +236,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
     }
 
     for i in 0..NUM_BARS {
-        bars[i].height2 -= bars[i].bargrav + barfo as f64 / 4.0;
+        bars[i].height2 -= bars[i].bargrav + bvalue;
 
         if bars[i].height2 <= bars[i].height {
             bars[i].height2 = bars[i].height;
@@ -235,7 +246,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
             bars[i].peak = bars[i].height2;
         } else {
             if bars[i].gravity <= 16.0 {
-                bars[i].gravity += (1.0 / 512.0) * (peakfo as f64);
+                bars[i].gravity += pvalue;
             }
             bars[i].peak = if bars[i].peak <= 0.0 {
                 0.0
@@ -251,8 +262,8 @@ fn draw_visualizer(
     _colors: &[Color],
     osc_colors: &[Color],
     peak_color: Color,
-    ys: &[u8],
-    fft: &[u8],
+    ys: &[f32],
+    fft: &[f32],
     oscstyle: &str,
     specdraw: &str,
     mode: u8,
@@ -262,12 +273,13 @@ fn draw_visualizer(
     peakfo: u8,
     barfo: u8,
     peaks: Arc<Mutex<u8>>,
+    amp: u8,
 ) {
     let peaks_unlocked = peaks.lock().unwrap();
     let xs: Vec<i32> = (0..75).collect();
-    let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample as i32 / 8) - 9)/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
+    let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample * amp as f32 / 8.0) + 7.6) as i32/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
     let fft: Vec<f64> = fft.iter()
-    .map(|&sample| ((sample as i32 / 8) - 9) as f64)
+    .map(|&sample| ((sample * amp as f32 / 8.0)) as f64)
     .collect(); // cast to i32
 
     let mut last_y = 0;
@@ -419,7 +431,7 @@ fn draw_visualizer(
     }  
 }
 
-fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_index: Option<usize>, amp: f32) {
+fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_index: Option<usize>) {
     enum ConfigType {
         WindowsOutput(cpal::SupportedStreamConfig),
         WindowsInput(cpal::SupportedStreamConfig),
@@ -466,31 +478,29 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
     }
 
     // ring buffer (VecDeque)
-    let mut ring_buffer: VecDeque<u8> = VecDeque::with_capacity(2048); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
+    let mut ring_buffer: VecDeque<f32> = VecDeque::with_capacity(2048); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
     };
 
     let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        // Convert f32 samples to u8 (0-255) and collect them into a Vec<u8>
+        // Convert f32 samples and collect them into a Vec<f32>
         let left: Vec<f32> = data
             .iter()
-            /* .step_by(16) */ // Skip every other sample (right channel)
-            .map(|&sample| (((-sample * amp)) * 127.5))
+            .map(|&sample| (((-sample)) * 127.5))
             .collect();
 
         let right: Vec<f32> = data
             .iter()
             .skip(1)
-            /* .step_by(16) */ // Skip every other sample (right channel)
-            .map(|&sample| (((-sample * amp)) * 127.5))
+            .map(|&sample| (((-sample)) * 127.5))
             .collect();
 
-        let mixed: Vec<u8> = left
+        let mixed: Vec<f32> = left
             .iter()
             .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample as f32 + *right_sample as f32 + 256.0) / 2.0) + 5.0) as u8)
+            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 2.0)))
             .collect();
 
         let mixed_fft: Vec<f32> = left
@@ -500,11 +510,11 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
             .collect();
 
         // Extend the ring buffer with the new samples
-        for left_sample in &mixed {
+        for mixed in &mixed {
             if ring_buffer.len() == ring_buffer.capacity() {
                 ring_buffer.pop_front(); // Remove the oldest sample when the buffer is full
             }
-            ring_buffer.push_back(*left_sample);
+            ring_buffer.push_back(*mixed);
         }
 
         // Apply the Hamming window to mixed_fft
@@ -577,7 +587,7 @@ fn audio_stream_loop(tx: Sender<Vec<u8>>, s: Sender<Vec<u8>>, selected_device_in
         }
 
         // Convert the spectrum to amplitudes
-        let amplitudes: Vec<_> = log_spectrum.iter().map(|c| c.l1_norm() as u8).collect();
+        let amplitudes: Vec<_> = log_spectrum.iter().map(|c| c.l1_norm() as f32).collect();
         //println!("{amplitudes:?}");
         //assert_eq!(&amplitudes, &[0, 0, 0, 8, 0, 0, 0, 0]);
 
@@ -634,8 +644,10 @@ fn draw_window(
     bandwidth: Arc<Mutex<String>>,
     mut peakfo: &mut u8,
     mut barfo: &mut u8,
+    mut amp: &mut u8,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
+    let amp_str: String = amp.to_string();
 /*     let specdraw_mutex = Arc::new(Mutex::new(specdraw.to_string()));
     let oscstyle_mutex = Arc::new(Mutex::new(oscstyle.to_string()));
     let bandwidth_mutex = Arc::new(Mutex::new(bandwidth.to_string())); */
@@ -692,9 +704,15 @@ fn draw_window(
 
     checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks, is_button_clicked, mx, my)?;
 
-    slider_small(canvas, cgenex, 133, 44, 209, 264, "Falloff speed:", font, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
-    slider_small(canvas, cgenex, 133, 44, 375, 264, "Peak falloff speed:", font, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
+    render_text(canvas, font, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
+    slider_small(canvas, cgenex, 133, 44, 209, 289, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
+    render_text(canvas, font, "Peak falloff speed:", cgenex[4], 375, 264, texture_creator)?;
+    slider_small(canvas, cgenex, 133, 44, 375, 289, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
 
+    render_text(canvas, font, "Gain:", cgenex[4], 209, 137, texture_creator)?;
+    slider_small(canvas, cgenex, 260, 44, 280, 140, texture_creator, &mut amp, 15, image_path, is_button_clicked, mx, my)?;
+
+    render_text(canvas, font, &amp_str, cgenex[4], 552, 137, texture_creator)?;
     button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, *mx, *my)?;
 
     radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw, is_button_clicked, *mx, *my)?;
@@ -743,7 +761,7 @@ fn main() -> Result<(), String> {
     let oscstyle = Arc::new(Mutex::new(args.oscstyle)); // Convert String to &str
     let specdraw = Arc::new(Mutex::new(args.specdraw));
     let zoom = args.zoom;
-    let amp = args.amp;
+    let amp = Arc::new(Mutex::new(args.amp));
     let mut mode = args.mode;
     let bandwidth = Arc::new(Mutex::new(args.bandwidth));
     let peakfo = Arc::new(Mutex::new(args.peakfo));
@@ -752,6 +770,7 @@ fn main() -> Result<(), String> {
 
     let mut peakfo_unlocked = peakfo.lock().unwrap();
     let mut barfo_unlocked = barfo.lock().unwrap();
+    let mut amp_unlocked = amp.lock().unwrap();
 
     if args.peakfo <= 1 {
         *peakfo_unlocked = 1;
@@ -837,15 +856,15 @@ fn main() -> Result<(), String> {
     let mut peakrgb = peakc(&viscolors);
     
     // The vector to store captured audio samples.
-    let audio_data = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let spec_data = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let audio_data = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let spec_data = Arc::new(Mutex::new(Vec::<f32>::new()));
 
     // Create a blocking receiver to get audio samples from the audio stream loop.
-    let (tx, rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
-    let (s, r): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
+    let (tx, rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
+    let (s, r): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index), amp));
+    thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index)));
     //thread::spawn(move || fltk());
 
     let image_path = "gen_ex.png";
@@ -930,7 +949,7 @@ fn main() -> Result<(), String> {
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone());
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone(), *amp_unlocked);
         draw_window(
             &mut canvas2,
             &viscolors,
@@ -949,6 +968,7 @@ fn main() -> Result<(), String> {
             bandwidth.clone(),
             &mut *peakfo_unlocked,
             &mut *barfo_unlocked,
+            &mut *amp_unlocked,
         )?;
         
 

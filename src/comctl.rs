@@ -202,8 +202,6 @@ pub fn slider_small(
     _height: u32,
     mut x: i32,
     y: i32,
-    text: &str,
-    font: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
     current_value: &mut u8,
     max_value: i32,
@@ -218,24 +216,22 @@ pub fn slider_small(
         Err(_) => return Err("Failed to acquire the lock on current_value".to_string()),
     }; */
 
-    render_text(canvas, font, text, cgenex[4], x, y, texture_creator)?;
-
     let indicator_x = x + 3 + ((*current_value as i32 - 1) * (width - 4) as i32 / (max_value - 1)) as i32;
 
     canvas.set_draw_color(cgenex[10]);
-    canvas.draw_line(Point::new(x+2, y+25), Point::new(x + width as i32 - 2, y+25)).unwrap();
-    canvas.draw_line(Point::new(x+2, y+25), Point::new(x + 2, y+27)).unwrap();
+    canvas.draw_line(Point::new(x+2, y), Point::new(x + width as i32 - 2, y)).unwrap();
+    canvas.draw_line(Point::new(x+2, y), Point::new(x + 2, y+2)).unwrap();
 
     canvas.set_draw_color(cgenex[11]);
-    canvas.draw_line(Point::new(x+3, y+26), Point::new(x + width as i32 - 3, y+26)).unwrap();
+    canvas.draw_line(Point::new(x+3, y+1), Point::new(x + width as i32 - 3, y+1)).unwrap();
 
     canvas.set_draw_color(cgenex[9]);
-    canvas.draw_line(Point::new(x+2, y+28), Point::new(x + width as i32 - 2, y+28)).unwrap();
-    canvas.draw_line(Point::new(x + width as i32 - 1, y+25), Point::new(x + width as i32 - 1, y+28)).unwrap();
+    canvas.draw_line(Point::new(x+2, y+3), Point::new(x + width as i32 - 2, y+3)).unwrap();
+    canvas.draw_line(Point::new(x + width as i32 - 1, y), Point::new(x + width as i32 - 1, y+3)).unwrap();
 
     canvas.set_draw_color(cgenex[7]);
-    canvas.draw_line(Point::new(x+3, y+27), Point::new(x + width as i32 - 3, y+27)).unwrap();
-    canvas.draw_line(Point::new(x + width as i32 - 2, y+27), Point::new(x + width as i32 - 2, y+26)).unwrap();
+    canvas.draw_line(Point::new(x+3, y+2), Point::new(x + width as i32 - 3, y+2)).unwrap();
+    canvas.draw_line(Point::new(x + width as i32 - 2, y+2), Point::new(x + width as i32 - 2, y+1)).unwrap();
     //canvas.draw_line(Point::new(x+2, y+25), Point::new(x + 2, y+27)).unwrap();
 
     let button_width = 48;
@@ -244,25 +240,25 @@ pub fn slider_small(
     for i in 0..max_value {
         let line_x = x + 3 + (i as f32 / (max_value - 1) as f32 * (width - 5) as f32) as i32;
         canvas.set_draw_color(cgenex[4]);
-        canvas.draw_line(Point::new(line_x, y + 34), Point::new(line_x, y + 36)).unwrap();
+        canvas.draw_line(Point::new(line_x, y + 10), Point::new(line_x, y + 12)).unwrap();
     }
 
     if mx >= &mut x && mx <= &mut (x + width as i32) &&
-    my >= &mut (y + 19) && my <= &mut (y + 19 + button_height) &&
+    my >= &mut (y - 5) && my <= &mut (y - 5 + button_height) &&
     is_button_clicked
     {
         // Update current_value based on mouse position
         *current_value = (((*mx - x - button_width / 2) as f32 / (width - button_width as u32) as f32) * (max_value - 1) as f32 + 1.0) as u8;
         if *current_value == 0{
             *current_value = 1;
-        } else if *current_value == 6 {
-            *current_value = 5;
+        } else if i32::from(*current_value) == max_value + 1 as i32 {
+            *current_value = max_value as u8;
         }
         //println!("Inside, mx {}, x {}, value {current_value}", mx, x);
     }
     
     // Draw the slider indicator
-    sliderbutton(canvas, indicator_x - 4, y + 19, 8, 16, texture_creator, image_path, is_button_clicked, mx, my)?;
+    sliderbutton(canvas, indicator_x - 4, y - 5, 8, 16, texture_creator, image_path, is_button_clicked, mx, my)?;
     
     Ok(())
 }
