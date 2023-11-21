@@ -10,10 +10,11 @@ use sdl2::keyboard::Keycode;
 use sdl2::mouse::Cursor;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
+use sdl2::rect::Point;
 use sdl2::event::{Event, WindowEvent};
 use sdl2::video::WindowContext;
 use sdl2::mouse::MouseButton;
-use sdl2::render::TextureCreator;
+use sdl2::render::{TextureCreator, self};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -24,12 +25,14 @@ use num::complex::ComplexFloat;
 use std::thread;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::fs;
 
 use image::GenericImageView;
 
 mod viscolors;
 mod comctl;
 
+use comctl::render_individual_letters;
 use comctl::listview_box;
 use comctl::groupbox;
 use comctl::render_text;
@@ -44,6 +47,8 @@ use comctl::radiobutton;
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
 const NUM_BARS: usize = 75;
+
+const SCROLL_SPEED: f64 = 0.75;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -95,6 +100,66 @@ struct Args {
     /// Enable/Disable peaks
     #[arg(long, default_value = "1")]
     peaks: u8,
+
+    /// Name of the config file.
+    #[arg(short, long, default_value = "rustampvis.ini")]
+    configini: String,
+}
+
+#[derive(Debug)]
+struct WinampConfig {
+    sa: Option<i32>,
+    safire: Option<i32>,
+    sa_peaks: Option<i32>,
+    safalloff: Option<i32>,
+    sa_peak_falloff: Option<i32>,
+    saamp: Option<i32>,
+    non_visualizer_sections: String, // Store non-visualizer sections as a string
+    // Add more fields as needed
+}
+
+fn winamp_ini(content: &str) -> WinampConfig {
+    let mut winamp_config = WinampConfig {
+        sa: None,
+        safire: None,
+        sa_peaks: None,
+        safalloff: None,
+        sa_peak_falloff: None,
+        saamp: None,
+        non_visualizer_sections: String::new(),
+    };
+
+    let mut in_winamp_section = false;
+
+    for line in content.lines() {
+        let trimmed_line = line.trim();
+
+        if trimmed_line == "[Winamp]" || trimmed_line == "[RustampVis]" {
+            in_winamp_section = true;
+        } else if in_winamp_section {
+            if let Some(key_value) = trimmed_line.split_once('=') {
+                let key = key_value.0.trim();
+                let value = key_value.1.trim();
+
+                match key {
+                    "sa" => winamp_config.sa = value.parse().ok(),
+                    "safire" => winamp_config.safire = value.parse().ok(),
+                    "sa_peaks" => winamp_config.sa_peaks = value.parse().ok(),              
+                    "safalloff" => winamp_config.safalloff = value.parse().ok(),
+                    "sa_peak_falloff" => {
+                        winamp_config.sa_peak_falloff = value.parse().ok();
+                    }
+                    "sa_amp" => winamp_config.saamp = value.parse().ok(),
+                    _ => {}
+                }
+            }
+        } else {
+            // Store non-visualizer sections
+            winamp_config.non_visualizer_sections.push_str(&format!("{}\n", trimmed_line));
+        }
+    }
+
+    winamp_config
 }
 
 #[derive(Copy)]
@@ -302,7 +367,7 @@ fn draw_visualizer(
             }
         }
     }
-    if mode == 1{
+    if mode == 2{
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
             let y = *y;
@@ -360,7 +425,7 @@ fn draw_visualizer(
             }
         }
 
-    } else if mode == 0{
+    } else if mode == 1{
         for (i, bar) in bars.iter().enumerate() {
             let x = i as i32 * zoom as i32;
             let y = -bar.height2 as i32 + 15;
@@ -427,7 +492,7 @@ fn draw_visualizer(
                 canvas.fill_rect(rect).unwrap();
             }
         }  
-    } else if mode == 2{
+    } else if mode == 0{
     }  
 }
 
@@ -628,7 +693,6 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_
 
 fn draw_window(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
-    _colors: &[Color],
     cgenex: &[Color],
     texture_creator: &TextureCreator<WindowContext>,
     font: &sdl2::ttf::Font,
@@ -645,19 +709,28 @@ fn draw_window(
     mut peakfo: &mut u8,
     mut barfo: &mut u8,
     mut amp: &mut u8,
+    scroll: f64,
+    ys: &mut [Bar],
+    mut config_content: String,
+    winamp_config: &mut WinampConfig,
+    config_file_path: String,
+    mut safire: i32,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
     let amp_str: String = amp.to_string();
 /*     let specdraw_mutex = Arc::new(Mutex::new(specdraw.to_string()));
     let oscstyle_mutex = Arc::new(Mutex::new(oscstyle.to_string()));
-    let bandwidth_mutex = Arc::new(Mutex::new(bandwidth.to_string())); */
+    let bandwidth_mutex = bandwidth.lock().unwrap(); */
+    let br: f64 = ys[5].height2 * 16.99;
+
+    //println!("{}", br as u8);
 
     if mode == 0 {
-        visstatus = "Spectrum Analyzer".to_string();
-    } else if mode == 1 {
-        visstatus = "Oscilloscope".to_string();
-    } else if mode == 2 {
         visstatus = "Disabled".to_string();
+    } else if mode == 1 {
+        visstatus = "Spectrum Analyzer".to_string();
+    } else if mode == 2 {
+        visstatus = "Oscilloscope".to_string();
     }
     let rect = Rect::new(0, 0, 606, 592);
     canvas.set_draw_color(cgenex[2]);
@@ -702,7 +775,9 @@ fn draw_window(
     render_text(canvas, font, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
     render_text(canvas, font, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
 
-    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks, is_button_clicked, mx, my)?;
+    render_individual_letters(canvas, font, "RustampVis", cgenex[4], 10, 464, scroll, 5, texture_creator, sdl2::rect::Rect::new(164, 88, 164, 88), br)?;
+
+    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks.clone(), is_button_clicked, mx, my)?;
 
     render_text(canvas, font, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
     slider_small(canvas, cgenex, 133, 44, 209, 289, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
@@ -715,16 +790,16 @@ fn draw_window(
     render_text(canvas, font, &amp_str, cgenex[4], 552, 137, texture_creator)?;
     button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw, is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw.clone(), is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth, is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth.clone(), is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle, is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle.clone(), is_button_clicked, *mx, *my)?;
     // Use the split_lines_and_create_textures function for classivis
     let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
 
     // Draw tex2
-     let mut y = 56;
+    let mut y = 56;
     for texture in tex2 {
         let texture_query = texture.query(); // Get the TextureQuery struct
         let w = texture_query.width;
@@ -733,6 +808,148 @@ fn draw_window(
         canvas.copy(&texture, None, Some(target2))?;
         y += h as i32;
     }
+
+    let safalloff_str = format!("safalloff={}", winamp_config.safalloff.unwrap_or_default());
+    if config_content.contains(&safalloff_str) {
+        config_content = config_content.replace(&safalloff_str, &format!("safalloff={}", *barfo - 1));
+        //println!("safalloff: {:?}, barfo: {}", winamp_config.safalloff, *barfo);
+    }
+
+    let saamp_str = format!("sa_amp={}", winamp_config.saamp.unwrap_or_default());
+    if config_content.contains(&saamp_str) {
+        config_content = config_content.replace(&saamp_str, &format!("sa_amp={}", *amp));
+        //println!("safalloff: {:?}, barfo: {}", winamp_config.safalloff, *barfo);
+    }
+
+    let sa_peak_falloff_str = format!("sa_peak_falloff={}", winamp_config.sa_peak_falloff.unwrap_or_default());
+    if config_content.contains(&sa_peak_falloff_str) {
+        config_content = config_content.replace(&sa_peak_falloff_str, &format!("sa_peak_falloff={}", *peakfo - 1));
+        //println!("sa_peak_falloff: {:?}, peakfo: {}", winamp_config.sa_peak_falloff, *peakfo);
+    }
+
+    let sa_str = format!("sa={}", winamp_config.sa.unwrap_or_default());
+    if config_content.contains(&sa_str) {
+        config_content = config_content.replace(&sa_str, &format!("sa={}", mode));
+        //println!("sa: {:?}, mode: {}", winamp_config.sa, mode);
+    }
+
+    let sa_peaks_str = format!("sa_peaks={}", winamp_config.sa_peaks.unwrap_or_default());
+    if config_content.contains(&sa_peaks_str) {
+        config_content = config_content.replace(&sa_peaks_str, &format!("sa_peaks={}", *peaks.lock().unwrap()));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
+      
+    // Update config_safire based on user input and other conditions
+    if *bandwidth.lock().unwrap() == "thin" {
+        // Set bandwidth to thin bands
+        safire |= 32; // Set the 6th bit to 1
+    } else {
+        // Set bandwidth to thick bands (default)
+        safire &= !32; // Set the 6th bit to 0
+    }
+
+    match oscstyle.lock().unwrap().as_str() {
+        "dots" => safire = safire & !(3 << 2),
+        "lines" => safire = (safire & !(3 << 2)) | (1 << 2),
+        "solid" => safire = (safire & !(3 << 2)) | (2 << 2),
+        _ => println!("Invalid oscilloscope style."),
+    }
+
+    match specdraw.lock().unwrap().as_str() {
+        "normal" => safire = safire & !3,
+        "fire" => safire = (safire & !3) | 1,
+        "line" => safire = (safire & !3) | 2,
+        _ => println!("Invalid analyzer style."),
+    }
+
+    // Update config_content based on the modified config_safire
+    let safire_str = format!("safire={}", winamp_config.safire.unwrap_or_default());
+    if config_content.contains(&safire_str) {
+        config_content = config_content.replace(&safire_str, &format!("safire={}", safire));
+        //println!("wac_safire: {:?}, config_safire: {}", winamp_config.safire, safire);
+    }
+
+    // Check if any changes were made before writing to the file
+    if config_content != fs::read_to_string(config_file_path.clone()).unwrap_or_default() {
+        match fs::write(config_file_path, config_content) {
+            Ok(_) => {
+                // Configuration updated successfully, no need to print anything
+            }
+            Err(_) => {
+                // Error updating configuration, no need to print anything
+            }
+        }
+    } else {
+        // No changes to the configuration, no need to print anything
+    }
+
+    Ok(())
+}
+
+fn draw_diag(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    cgenex: &[Color],
+    ys: &[f32],
+    fft: &[f32],
+) -> Result<(), String> {
+    let rect = Rect::new(0, 0, 606, 592);
+    canvas.set_draw_color(cgenex[2]);
+    canvas.fill_rect(rect).unwrap();
+
+    let ys: Vec<i32> = ys.iter().step_by(8).map(|&sample| ((sample as f32 + 128.0)) as i32).collect();
+    let xs: Vec<i32> = (0..256).collect();
+    let fft: Vec<i32> = fft.iter()
+    .map(|&sample| ((sample as f32)) as i32)
+    .collect(); // cast to i32
+    canvas.set_draw_color(cgenex[5]);
+    let rect = Rect::new(185, 28, 412, 556);
+    canvas.draw_rect(rect).unwrap();
+
+    let mut last_y = 0;
+    let mut top: i32;
+    let mut bottom: i32;
+
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        let x = *x;
+        let y = *y;
+        if x == 0 {
+            last_y = y;
+        }
+        let half_osc = 128;
+        if y >= half_osc{
+            top = half_osc;
+            bottom = y;
+        } else {
+            top = y;
+            bottom = half_osc-1;
+        }
+            for dy in top..=bottom {
+                let point = Point::new(x + 230, dy/2);
+                canvas.set_draw_color(Color::RGB(255, 255, 255));
+                canvas.draw_point(point).unwrap();
+            }
+        }
+
+        for (x, y) in xs.iter().zip(fft.iter().step_by(4)) {
+            let x = *x;
+            let y = *y;
+            if x == 0 {
+                last_y = y;
+            }
+            top = last_y;
+            bottom = y;
+            last_y = y;
+            if bottom < top {
+                std::mem::swap(&mut bottom, &mut top);
+                top += 1;
+            }
+                for dy in top..=bottom {
+                    let point = Point::new(x + 230, -dy+400);
+                    canvas.set_draw_color(Color::RGB(255, 255, 255));
+                    canvas.draw_point(point).unwrap();
+                }
+            }
+
     Ok(())
 }
 
@@ -771,6 +988,7 @@ fn main() -> Result<(), String> {
     let mut peakfo_unlocked = peakfo.lock().unwrap();
     let mut barfo_unlocked = barfo.lock().unwrap();
     let mut amp_unlocked = amp.lock().unwrap();
+    //let mut peaks_unlocked = peaks.lock().unwrap();
 
     if args.peakfo <= 1 {
         *peakfo_unlocked = 1;
@@ -783,6 +1001,53 @@ fn main() -> Result<(), String> {
     } else if args.barfo >= 5 {
         *barfo_unlocked = 5;
     }
+
+    // Extract the configuration file path from the command-line arguments
+    let config_file_path = args.configini;
+
+    // Read the content of the configuration file
+    let config_content = match fs::read_to_string(config_file_path.clone()) {
+        Ok(content) => content,
+        Err(_) => {
+            eprintln!("Error reading the configuration file.");
+            return Err("Failed to read configuration file.".to_string());
+        }
+    };
+    
+    // Parse the configuration file content
+    let mut winamp_config = winamp_ini(&config_content);
+    
+    // Access the values in the configuration
+    let sa = winamp_config.sa.unwrap_or_default();
+    let safire = winamp_config.safire.unwrap_or_default();
+    let sa_peaks = winamp_config.sa_peaks.unwrap_or_default();
+    let safalloff = winamp_config.safalloff.unwrap_or_default();
+    let sa_peak_falloff = winamp_config.sa_peak_falloff.unwrap_or_default();
+    let sa_amp = winamp_config.sa.unwrap_or_default();
+
+    *barfo_unlocked = safalloff as u8 + 1;
+    *peakfo_unlocked = sa_peak_falloff as u8 + 1;
+    mode = sa as u8;
+    *peaks.try_lock().unwrap() = sa_peaks as u8;
+    if (safire & (1 << 5)) != 0 {
+        *bandwidth.lock().unwrap() = "thin".to_string();
+    }
+    match (safire >> 2) & 3 {
+        0 => *oscstyle.lock().unwrap() = "dots".to_string(),
+        1 => *oscstyle.lock().unwrap() = "lines".to_string(),
+        2 => *oscstyle.lock().unwrap() = "solid".to_string(),
+        _ => println!("Invalid oscilloscope style in config_safire."),
+    }
+    println!("Loaded oscilloscope style: {}", oscstyle.lock().unwrap().as_str());
+
+    match safire & 3 {
+        0 => *specdraw.lock().unwrap() = "normal".to_string(),
+        1 => *specdraw.lock().unwrap() = "fire".to_string(),
+        2 => *specdraw.lock().unwrap() = "line".to_string(),
+        _ => println!("Invalid analyzer style in config_safire."),
+    }
+    println!("Loaded Spectrum Analyzer style: {}", specdraw.lock().unwrap().as_str());
+    //config_sa_peaks = *peaks_unlocked != 0;
 
     let mut bars = [Bar {
         height: 0.0,
@@ -871,6 +1136,8 @@ fn main() -> Result<(), String> {
     let genex_colors = genex(image_path);
     let mut is_button_clicked = false;
 
+    let mut scroll: f64 = 0.0;
+
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -902,9 +1169,9 @@ fn main() -> Result<(), String> {
                 Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Right, .. } => {
                     let mut oscstyle = oscstyle.lock().unwrap();
                     let mut specdraw = specdraw.lock().unwrap();
-                    if mode == 1 {
+                    if mode == 2 {
                         switch_oscstyle(&mut *oscstyle);
-                    } else if mode == 0 {
+                    } else if mode == 1 {
                         switch_specstyle(&mut *specdraw);
                     }
                 }
@@ -952,7 +1219,6 @@ fn main() -> Result<(), String> {
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone(), *amp_unlocked);
         draw_window(
             &mut canvas2,
-            &viscolors,
             &genex_colors,
             &texture_creator,
             &font,
@@ -969,12 +1235,20 @@ fn main() -> Result<(), String> {
             &mut *peakfo_unlocked,
             &mut *barfo_unlocked,
             &mut *amp_unlocked,
+            scroll,
+            &mut bars,
+            config_content.clone(),
+            &mut winamp_config,
+            config_file_path.clone(),
+            safire,
         )?;
         
+        //draw_diag(&mut canvas2, &genex_colors, &*audio_data, &*spec_data)?;
 
         // draw the cool shit
         canvas.present();
         canvas2.present();
+        scroll += SCROLL_SPEED;
 
         std::thread::sleep(std::time::Duration::from_millis(0));
     }

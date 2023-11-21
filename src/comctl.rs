@@ -570,3 +570,49 @@ pub fn radiobutton(
     Ok(())
 }
 
+use std::f64::consts::PI;
+
+pub fn render_individual_letters(
+    canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
+    font: &Font,
+    text: &str,
+    color: Color,
+    start_x: i32,
+    start_y: i32,
+    scroll: f64,
+    spacing: i32,
+    texture_creator: &TextureCreator<WindowContext>,
+    bounds: Rect, // Add a bounds parameter
+    brightness: f64,
+) -> Result<(), String> {
+    let mut current_x = start_x + 33;
+    let amplitude = 128 as f64 / 4.0; // Adjust the amplitude as needed
+    let frequency = 0.20 * PI / 75 as f64; // Adjust the frequency as needed
+
+    for ch in text.chars() {
+        // Skip rendering spaces
+        if ch.is_whitespace() {
+            current_x += spacing;
+            continue;
+        }
+    
+    let coloraudio = sdl2::pixels::Color { r: 255, g: 255, b: 255, a: brightness as u8 + 1 };
+
+        let sine_offset = (amplitude * (2.0 * PI * (current_x as f64 + scroll) * frequency).sin()) as i32 + start_y;
+
+        let surface = font.render(&ch.to_string()).solid(coloraudio).map_err(|e| e.to_string())?;
+        let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+        let (char_width, char_height) = font.size_of_char(ch).map_err(|e| e.to_string())?;
+
+        let target = Rect::new(current_x, sine_offset, char_width, char_height);
+
+        // Ensure the text stays within the specified bounds
+        let clipped_target = target.intersection(bounds).unwrap_or(target);
+
+        canvas.copy(&texture, None, Some(clipped_target))?;
+
+        current_x += char_width as i32 + spacing;
+    }
+
+    Ok(())
+}
