@@ -252,13 +252,21 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
     //print!("{}", barfo as f64 / 2.75);
     let mut bvalue: f64 = 0.0;
     let mut pvalue: f64 = 0.0;
+
+    let bv_vec: Vec<f64> = vec![0.25, 0.5, 0.75, 1.0, 2.0];
+    let bv_index = (barfo as usize).saturating_sub(1).min(bv_vec.len() - 1);
+    let bv_value = bv_vec[bv_index] as f64;
+
+    let pv_vec: Vec<f64> = vec![0.15, 0.5, 1.0, 2.0, 3.0]; // peaks dont fall like they do in winamp/WACUP
+    let pv_index = (peakfo as usize).saturating_sub(1).min(pv_vec.len() - 1);
+    let pv_value = pv_vec[pv_index] as f64;
     if cfg!(windows) {
-        bvalue = (barfo as f64 / 2.75) / 2.0;
-        pvalue = ((1.0 / 512.0) * (peakfo as f64)) / 2.0;
+        bvalue = bv_value / 2.0;
+        pvalue = (pv_value / 64.0) / 2.0;
     }
     else {
-        bvalue = barfo as f64 / 2.75;
-        pvalue = (1.0 / 512.0) * (peakfo as f64);
+        bvalue = bv_value;
+        pvalue = pv_value / 64.0;
     }
     if bandwidth == "thick" {
         for bars_chunk in bars.chunks_mut(4) {
