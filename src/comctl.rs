@@ -248,7 +248,7 @@ pub fn slider_small(
     is_button_clicked
     {
         // Update current_value based on mouse position
-        *current_value = (((*mx - x - button_width / 2) as f32 / (width - button_width as u32) as f32) * (max_value - 1) as f32 + 1.0) as u8;
+        *current_value = (((*mx - x - 3) as f32 / (width - 4) as f32) * (max_value - 1) as f32 + 1.0) as u8;
         if *current_value == 0{
             *current_value = 1;
         } else if i32::from(*current_value) == max_value + 1 as i32 {

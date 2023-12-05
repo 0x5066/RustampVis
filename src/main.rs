@@ -14,7 +14,7 @@ use sdl2::rect::Point;
 use sdl2::event::{Event, WindowEvent};
 use sdl2::video::WindowContext;
 use sdl2::mouse::MouseButton;
-use sdl2::render::{TextureCreator, self};
+use sdl2::render::TextureCreator;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -49,6 +49,7 @@ const WINDOW_HEIGHT: i32 = 16;
 const NUM_BARS: usize = 75;
 
 const SCROLL_SPEED: f64 = 0.75;
+static mut SHIFT_AMOUNT: usize = 0;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -104,6 +105,16 @@ struct Args {
     /// Name of the config file.
     #[arg(short, long, default_value = "rustampvis.ini")]
     configini: String,
+
+    /// Debug
+    #[arg(long)]
+    debug: bool,
+}
+
+#[derive(Debug)]
+struct DeviceSelection {
+    index: usize,
+    name: String,
 }
 
 #[derive(Debug)]
@@ -113,7 +124,7 @@ struct WinampConfig {
     sa_peaks: Option<i32>,
     safalloff: Option<i32>,
     sa_peak_falloff: Option<i32>,
-    saamp: Option<i32>,
+    sa_amp: Option<i32>,
     non_visualizer_sections: String, // Store non-visualizer sections as a string
     // Add more fields as needed
 }
@@ -125,7 +136,7 @@ fn winamp_ini(content: &str) -> WinampConfig {
         sa_peaks: None,
         safalloff: None,
         sa_peak_falloff: None,
-        saamp: None,
+        sa_amp: None,
         non_visualizer_sections: String::new(),
     };
 
@@ -146,10 +157,8 @@ fn winamp_ini(content: &str) -> WinampConfig {
                     "safire" => winamp_config.safire = value.parse().ok(),
                     "sa_peaks" => winamp_config.sa_peaks = value.parse().ok(),              
                     "safalloff" => winamp_config.safalloff = value.parse().ok(),
-                    "sa_peak_falloff" => {
-                        winamp_config.sa_peak_falloff = value.parse().ok();
-                    }
-                    "sa_amp" => winamp_config.saamp = value.parse().ok(),
+                    "sa_amp" => winamp_config.sa_amp = value.parse().ok(),
+                    "sa_peak_falloff" => winamp_config.sa_peak_falloff = value.parse().ok(),
                     _ => {}
                 }
             }
@@ -248,63 +257,72 @@ fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     y0 + (x - x0) * (y1 - y0) / (x1 - x0)
 }
 
-fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8, barfo: u8) {
+fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, bandwidth: &str, peakfo: u8, barfo: u8, debug: bool, mut debug_vector: Vec<f64>,) {
     //print!("{}", barfo as f64 / 2.75);
-    let mut bvalue: f64 = 0.0;
-    let mut pvalue: f64 = 0.0;
 
-    let bv_vec: Vec<f64> = vec![0.25, 0.5, 0.75, 1.0, 2.0];
+    let bv_vec: Vec<f64> = vec![0.19, 0.422, 0.75, 1.0, 2.0];
     let bv_index = (barfo as usize).saturating_sub(1).min(bv_vec.len() - 1);
     let bv_value = bv_vec[bv_index] as f64;
 
-    let pv_vec: Vec<f64> = vec![0.15, 0.5, 1.0, 2.0, 3.0]; // peaks dont fall like they do in winamp/WACUP
+    let pv_vec: Vec<f64> = vec![1.0, 2.0, 6.0, 14.0, 20.0]; // peaks dont fall like they do in winamp/WACUP
+    // now they kinda do
     let pv_index = (peakfo as usize).saturating_sub(1).min(pv_vec.len() - 1);
     let pv_value = pv_vec[pv_index] as f64;
-    if cfg!(windows) {
-        bvalue = bv_value / 2.0;
-        pvalue = (pv_value / 64.0) / 2.0;
-    }
-    else {
-        bvalue = bv_value;
-        pvalue = pv_value / 64.0;
-    }
-    if bandwidth == "thick" {
-        for bars_chunk in bars.chunks_mut(4) {
-            let mut sum = 0.0;
+    let threshold: f64 = ((pv_value as f64)) / 14.0 + 0.75;
+    //println!{"{}, {}", pv_value, threshold};
 
-            for _ in 0..24 * 2 {
-                if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64;
-                } else {
-                    break;
+    let bvalue: f64 = bv_value;
+    let pvalue: f64 = pv_value / 64.0;
+
+    if !debug {
+        if bandwidth == "thick" {
+            for bars_chunk in bars.chunks_mut(4) {
+                let mut sum = 0.0;
+
+                for _ in 0..24 * 2 {
+                    if let Some(fft_value) = fft_iter.next() {
+                        sum += *fft_value as f64;
+                    } else {
+                        break;
+                    }
+                }
+
+                for bar in bars_chunk.iter_mut().take(4) {
+                    bar.height = sum / (25.0 * 2.0);
+                    if bar.height >= 15.0 {
+                        bar.height = 15.0;
+                    }
                 }
             }
+        } else {
+            for bars_chunk in bars.chunks_mut(1) {
+                let mut sum = 0.0;
 
-            for bar in bars_chunk.iter_mut().take(4) {
-                bar.height = sum / (25.0 * 2.0);
-                if bar.height >= 15.0 {
-                    bar.height = 15.0;
+                for _ in 0..6 * 2 {
+                    if let Some(fft_value) = fft_iter.next() {
+                        sum += *fft_value as f64;
+                    } else {
+                        break;
+                    }
+                }
+
+                for bar in bars_chunk.iter_mut() {
+                    bar.height = sum / (7.0 * 2.0);
+                    if bar.height >= 15.0 {
+                        bar.height = 15.0;
+                    }
                 }
             }
         }
-    } else {
-        for bars_chunk in bars.chunks_mut(1) {
-            let mut sum = 0.0;
+    }
 
-            for _ in 0..6 * 2 {
-                if let Some(fft_value) = fft_iter.next() {
-                    sum += *fft_value as f64;
-                } else {
-                    break;
-                }
-            }
+    if debug {
+        // Shift the debug vector to the right on every tick
+        shift_vector_to_right(&mut debug_vector);
 
-            for bar in bars_chunk.iter_mut() {
-                bar.height = sum / (7.0 * 2.0);
-                if bar.height >= 15.0 {
-                    bar.height = 15.0;
-                }
-            }
+        // Set the height of bars based on the shifted debug vector
+        for (bar, &debug_value) in bars.iter_mut().zip(debug_vector.iter()) {
+            bar.height = debug_value;
         }
     }
 
@@ -313,20 +331,75 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
 
         if bars[i].height2 <= bars[i].height {
             bars[i].height2 = bars[i].height;
-        }
-        if bars[i].height2 > bars[i].peak {
-            bars[i].gravity = 0.0;
-            bars[i].peak = bars[i].height2;
-        } else {
-            if bars[i].gravity <= 16.0 {
-                bars[i].gravity += pvalue;
-            }
-            bars[i].peak = if bars[i].peak <= 0.0 {
-                0.0
+        if debug{
+            if bars[i].height2 > bars[i].peak {
+                bars[i].gravity = 0.0;
+                bars[i].peak = bars[i].height2;
             } else {
-                bars[i].peak - bars[i].gravity
-            };
+                if bars[i].gravity <= 16.0 {
+                    bars[i].gravity += pvalue;
+                }
+                bars[i].peak = f64::max(0.0, bars[i].peak - f64::max(0.0, bars[i].gravity - threshold));
+                // Check if height2 is within the specified range (14.0 to 14.99)
+                if (bars[i].height2 >= 14.0) && (bars[i].height2 <= 14.99) || (bv_index == 4) && (bars[i].height2 >= 13.0) && (bars[i].height2 <= 14.99) {
+                    // Offset peak by -1
+                    bars[i].peak -= 0.25;
+                }
+                if (bars[i].peak >= 0.0) && (bars[i].peak <= 1.0){
+                    bars[i].peak = -3.0;
+                }
+            }
+
         }
+
+        }
+        if !debug {
+            if bars[i].height2 > bars[i].peak {
+                bars[i].gravity = 0.0;
+                bars[i].peak = bars[i].height2;
+            } else {
+                if bars[i].gravity <= 16.0 {
+                    bars[i].gravity += pvalue;
+                }
+                bars[i].peak = f64::max(0.0, bars[i].peak - f64::max(0.0, bars[i].gravity - threshold));
+                if bars[i].peak < bars[i].height2 {
+                    bars[i].peak = bars[i].height2;
+                }
+            }
+            // check if height2 is within the range (14.0 to 14.99)
+            // also check if height 2 is within 13 and 14.99 and
+            // if our bar fall off is set to 4, otherwise chaos will ensue
+            if (bars[i].height2 >= 14.0) && (bars[i].height2 <= 14.99) || (bv_index == 4) && (bars[i].height2 >= 13.0) && (bars[i].height2 <= 14.99) {
+                // set peak to 14.0 after bars hit value 15
+                bars[i].peak = 14.0;
+            }
+            if (bars[i].peak >= 0.0) && (bars[i].peak <= 1.0){
+                bars[i].peak = -3.0;
+            }
+            //println!("{}, {}", bars[i].peak, i);
+            //println!("{}, {}", bars[i].height2, i);
+        }
+    }
+}
+
+// Define shift_vector_to_right function
+fn shift_vector_to_right(vector: &mut Vec<f64>) {
+    static mut SHIFT_AMOUNT: isize = 0;
+    static mut DIRECTION: isize = 1;
+
+    unsafe {
+        SHIFT_AMOUNT += DIRECTION;
+
+        if SHIFT_AMOUNT == vector.len() as isize -1 {
+            // Reached the end, change direction to negative
+            DIRECTION = -1;
+        } else if SHIFT_AMOUNT == 0 {
+            // Reached the beginning, change direction to positive
+            DIRECTION = 1;
+        }
+
+        vector.rotate_right(SHIFT_AMOUNT.abs() as usize);
+        //println!("{}", SHIFT_AMOUNT);
     }
 }
 
@@ -347,6 +420,8 @@ fn draw_visualizer(
     barfo: u8,
     peaks: Arc<Mutex<u8>>,
     amp: u8,
+    debug: bool,
+    debug_vector: Vec<f64>,
 ) {
     let peaks_unlocked = peaks.lock().unwrap();
     let xs: Vec<i32> = (0..75).collect();
@@ -360,7 +435,7 @@ fn draw_visualizer(
     let mut bottom: i32;
 
     // analyzer stuff
-    process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo, barfo);
+    process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo, barfo, debug, debug_vector);
 
     for x in 0..75 {
         for y in 0..16 {
@@ -464,15 +539,11 @@ fn draw_visualizer(
         }
         for (i, bar) in bars.iter().enumerate() {
             let bar_x = i as i32 * zoom as i32;
-            let bar_height = -bar.peak + 15.98999;
-            let mut peaki32: i32 = bar_height as i32;
-
-        if peaki32 > 14 {
-            peaki32 = 18;
-        }
+            let bar_height = -bar.peak + 15.99999999;
+            let peaki32: i32 = bar_height as i32;
 
             let rect = Rect::new(
-                bar_x, peaki32 * zoom as i32,
+                bar_x, peaki32.wrapping_mul(zoom as i32),
                 zoom as u32,
                 zoom as u32,
             );
@@ -723,6 +794,7 @@ fn draw_window(
     winamp_config: &mut WinampConfig,
     config_file_path: String,
     mut safire: i32,
+    device_in_use: &String,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
     let amp_str: String = amp.to_string();
@@ -777,6 +849,10 @@ fn draw_window(
     groupbox(canvas, &groupboxtext1, font, texture_creator, cgenex, 195, 37, 384, 125)?;
     groupbox(canvas, &groupboxtext2, font, texture_creator, cgenex, 195, 170, 384, 153)?;
     groupbox(canvas, &groupboxtext3, font, texture_creator, cgenex, 195, 333, 384, 46)?;
+    groupbox(canvas, "Device in use:", font, texture_creator, cgenex, 195, 388, 384, 46)?;
+    render_text(canvas, font, device_in_use, cgenex[4], 209, 409, texture_creator)?;
+
+    //println!("{}", device_in_use);
 
     render_text(canvas, font, vis_text, cgenex[1], 212, 108, texture_creator)?;
     render_text(canvas, font, &gbinfo1, cgenex[4], 206, 193, texture_creator)?;
@@ -823,7 +899,7 @@ fn draw_window(
         //println!("safalloff: {:?}, barfo: {}", winamp_config.safalloff, *barfo);
     }
 
-    let saamp_str = format!("sa_amp={}", winamp_config.saamp.unwrap_or_default());
+    let saamp_str = format!("sa_amp={}", winamp_config.sa_amp.unwrap_or_default());
     if config_content.contains(&saamp_str) {
         config_content = config_content.replace(&saamp_str, &format!("sa_amp={}", *amp));
         //println!("safalloff: {:?}, barfo: {}", winamp_config.safalloff, *barfo);
@@ -964,23 +1040,37 @@ fn draw_diag(
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
+    let mut device_in_use: String = "".to_string();
+
     let selected_device_index = match args.device {
         Some(index) => {
             if index == 0 {
                 eprintln!("Device index should start from 1.");
                 std::process::exit(1);
             }
+            device_in_use = format!("{}.", index);
             index - 1
         }
         None => {
             // Prompt the user to select an audio device
-            let selected_device_index = prompt_for_device();
-            if selected_device_index.is_none() {
+            let selection = prompt_for_device();
+            if selection.is_none() {
                 std::process::exit(1);
             }
-            selected_device_index.unwrap()
+
+            // Access the selected index and name
+            let selected_device_index = selection.as_ref().unwrap().index;
+            let selected_device_name = &selection.as_ref().unwrap().name;
+            device_in_use = format!("{}. {}", selected_device_index, selected_device_name);
+
+            selected_device_index
         }
     };
+
+    //println!("{}", device_in_use);
+
+    let mut debug_vector: Vec<f64> = vec![0.0; 75];
+    debug_vector[0] = 15.0;
     
     // handle args
     let oscstyle = Arc::new(Mutex::new(args.oscstyle)); // Convert String to &str
@@ -997,6 +1087,10 @@ fn main() -> Result<(), String> {
     let mut barfo_unlocked = barfo.lock().unwrap();
     let mut amp_unlocked = amp.lock().unwrap();
     //let mut peaks_unlocked = peaks.lock().unwrap();
+
+    if args.debug == true {
+        println!("debug");
+    }
 
     if args.peakfo <= 1 {
         *peakfo_unlocked = 1;
@@ -1031,11 +1125,12 @@ fn main() -> Result<(), String> {
     let sa_peaks = winamp_config.sa_peaks.unwrap_or_default();
     let safalloff = winamp_config.safalloff.unwrap_or_default();
     let sa_peak_falloff = winamp_config.sa_peak_falloff.unwrap_or_default();
-    let sa_amp = winamp_config.sa.unwrap_or_default();
+    let sa_amp = winamp_config.sa_amp.unwrap_or_default();
 
     *barfo_unlocked = safalloff as u8 + 1;
     *peakfo_unlocked = sa_peak_falloff as u8 + 1;
     mode = sa as u8;
+    *amp_unlocked = sa_amp as u8;
     *peaks.try_lock().unwrap() = sa_peaks as u8;
     if (safire & (1 << 5)) != 0 {
         *bandwidth.lock().unwrap() = "thin".to_string();
@@ -1073,20 +1168,23 @@ fn main() -> Result<(), String> {
     let video_subsystem = sdl_context.video()?;
     let _image_context = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)?;
     //sdl2::hint::set("SDL_HINT_RENDER_SCALE_QUALITY", "0");
-    let window = video_subsystem
-        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
-        .position_centered()
-        .build()
-        .unwrap();
 
     let window2 = video_subsystem
         .window("RustampVis Preferences", 606 as u32, 592 as u32)
         .position_centered()
         .build()
         .unwrap();
-    let mut canvas = window.into_canvas().build().unwrap();
 
     let mut canvas2 = window2.into_canvas().build().unwrap();
+
+    let window = video_subsystem
+        .window("Winamp Mini Visualizer (in Rust)", (WINDOW_WIDTH * zoom) as u32, (WINDOW_HEIGHT * zoom) as u32)
+        .position_centered()
+        .build()
+        .unwrap();
+
+    let mut canvas = window.into_canvas().build().unwrap();
+
     let ttf_context = sdl2::ttf::init().unwrap();
     let texture_creator = canvas2.texture_creator();
     let font_path: &str;
@@ -1127,18 +1225,36 @@ fn main() -> Result<(), String> {
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
-    
-    // The vector to store captured audio samples.
-    let audio_data = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let spec_data = Arc::new(Mutex::new(Vec::<f32>::new()));
+
+    let audio_data = Arc::new(Mutex::new(vec![0.0; 4096]));
+    let spec_data = Arc::new(Mutex::new(vec![0.0; 4096]));
 
     // Create a blocking receiver to get audio samples from the audio stream loop.
     let (tx, rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
     let (s, r): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
 
+    let audio_data_clone = Arc::clone(&audio_data);
+    let spec_data_clone = Arc::clone(&spec_data);
+
     // Start the audio stream loop in a separate thread.
     thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index)));
-    //thread::spawn(move || fltk());
+
+    thread::spawn(move || {
+        loop {
+            // swap the captured audio samples with the visualization data.
+            if let Ok(audio_samples) = rx.recv() {
+                let mut audio_data = audio_data_clone.lock().unwrap();
+                *audio_data = audio_samples;
+            }
+
+            if let Ok(spec_samples) = r.recv() {
+                let mut spec_data = spec_data_clone.lock().unwrap();
+                *spec_data = spec_samples;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(0));
+        }
+    });
 
     let image_path = "gen_ex.png";
     let genex_colors = genex(image_path);
@@ -1156,7 +1272,7 @@ fn main() -> Result<(), String> {
                 Event::Window { win_event: WindowEvent::Close, .. } => {
                     // SDL_GetWindowByID, SDL_HideWindow it
                 },
-                Event::KeyDown { window_id: 1, keycode: Some(Keycode::R), .. } => {
+                Event::KeyDown { window_id: 2, keycode: Some(Keycode::R), .. } => {
                     // Reload the viscolors data when "R" key is pressed
                     let new_viscolors = viscolors::load_colors(&args.viscolor);
                     let new_osc_colors = osccolors(&new_viscolors);
@@ -1165,7 +1281,7 @@ fn main() -> Result<(), String> {
                     osc_colors = new_osc_colors;
                     peakrgb = new_peakrgb;
                 }
-                Event::KeyDown { window_id: 1, keycode: Some(Keycode::B), .. } => {
+                Event::KeyDown { window_id: 2, keycode: Some(Keycode::B), .. } => {
                     // switch bandwidth
                     let mut bandwidth = bandwidth.lock().unwrap();
                     if *bandwidth == "thick" {
@@ -1174,7 +1290,7 @@ fn main() -> Result<(), String> {
                         switch_bandwidth(&mut *bandwidth);
                     }
                 }
-                Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Right, .. } => {
+                Event::MouseButtonDown { window_id: 2, mouse_btn: MouseButton::Right, .. } => {
                     let mut oscstyle = oscstyle.lock().unwrap();
                     let mut specdraw = specdraw.lock().unwrap();
                     if mode == 2 {
@@ -1183,24 +1299,24 @@ fn main() -> Result<(), String> {
                         switch_specstyle(&mut *specdraw);
                     }
                 }
-                Event::MouseButtonDown { window_id: 1, mouse_btn: MouseButton::Left, .. } => {
+                Event::MouseButtonDown { window_id: 2, mouse_btn: MouseButton::Left, .. } => {
                     mode = (mode + 1) % 3;
                     //println!("{mode}")
                 }
-                Event::MouseMotion { window_id: 2, x, y, .. } => {
+                Event::MouseMotion { window_id: 1, x, y, .. } => {
                     mouse_x = x;
                     mouse_y = y;
                     // Handle mouse motion events
                     //println!("Mouse moved to ({}, {})", x, y);
                 }
-                Event::MouseButtonDown { window_id: 2, mouse_btn, x: _, y: _, .. } => {
+                Event::MouseButtonDown { window_id: 1, mouse_btn, x: _, y: _, .. } => {
                     // Handle mouse button down events
                     if mouse_btn == sdl2::mouse::MouseButton::Left {
                         is_button_clicked = true;
                         //println!("{:?} {:?}", barfo_unlocked, peakfo_unlocked);
                     }
                 }
-                Event::MouseButtonUp { window_id: 2, mouse_btn, x: _, y: _, .. } => {
+                Event::MouseButtonUp { window_id: 1, mouse_btn, x: _, y: _, .. } => {
                     // Handle mouse button down events
                     if mouse_btn == sdl2::mouse::MouseButton::Left {
                         is_button_clicked = false;
@@ -1210,21 +1326,13 @@ fn main() -> Result<(), String> {
             }
         }
 
-        // Lock the mutex and swap the captured audio samples with the visualization data.
-        let audio_samples = rx.recv().unwrap();
-        let spec_samples = r.recv().unwrap();
-        //println!("Captured audio samples: {:?}", audio_samples);
+        let audio_data = audio_data.lock().unwrap().clone();
+        let spec_data = spec_data.lock().unwrap().clone();
 
-        // Lock the mutex and update the captured audio samples.
-        let mut audio_data = audio_data.lock().unwrap();
-        *audio_data = audio_samples;
-
-        let mut spec_data = spec_data.lock().unwrap();
-        *spec_data = spec_samples;
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &*audio_data, &*spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone(), *amp_unlocked);
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &audio_data, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
         draw_window(
             &mut canvas2,
             &genex_colors,
@@ -1249,6 +1357,7 @@ fn main() -> Result<(), String> {
             &mut winamp_config,
             config_file_path.clone(),
             safire,
+            &device_in_use,
         )?;
         
         //draw_diag(&mut canvas2, &genex_colors, &*audio_data, &*spec_data)?;
@@ -1258,7 +1367,7 @@ fn main() -> Result<(), String> {
         canvas2.present();
         scroll += SCROLL_SPEED;
 
-        std::thread::sleep(std::time::Duration::from_millis(0));
+        std::thread::sleep(std::time::Duration::from_millis(13));
     }
 
     // Stop the audio streaming loop gracefully
@@ -1267,7 +1376,7 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn prompt_for_device() -> Option<usize> {
+fn prompt_for_device() -> Option<DeviceSelection> {
     let host = cpal::default_host();
     let devices = host.devices().expect("Failed to retrieve devices").collect::<Vec<_>>();
     
@@ -1279,13 +1388,18 @@ fn prompt_for_device() -> Option<usize> {
     println!("Enter the number of the audio device (Speakers or Microphone) to visualize: ");
 
     loop {
-        //println!("Please select an audio device (1 - {}):", devices.len());
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).expect("Failed to read line");
 
         if let Ok(index) = input.trim().parse::<usize>() {
             if index > 0 && index <= devices.len() {
-                return Some(index - 1); // Convert to 0-based index
+                let selected_device = &devices[index - 1];
+                let device_name = selected_device.name().unwrap_or("Unknown Device".to_string());
+                // Print debug information
+                //println!("{}. {}", index, device_name);
+                
+                // Return a struct with both the index and name
+                return Some(DeviceSelection { index: index, name: device_name });
             } else {
                 println!("Invalid input.");
                 println!("Please select an audio device (1 - {}):", devices.len());
