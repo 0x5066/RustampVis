@@ -181,7 +181,6 @@ pub fn checkbox(
 
     render_text(canvas, font, text, cgenex[4], x + 17, y, texture_creator)?;
 
-
     if mx >= &mut x && mx <= &mut (x + 13 as i32) && my >= &mut y && my <= &mut (y + 13 as i32) && is_button_clicked {
         // Toggle item_value between 0 and 1
         *item_value = 1 - *item_value;
@@ -248,7 +247,7 @@ pub fn slider_small(
     is_button_clicked
     {
         // Update current_value based on mouse position
-        *current_value = (((*mx - x - 3) as f32 / (width - 4) as f32) * (max_value - 1) as f32 + 1.0) as u8;
+        *current_value = (((*mx - x + 1) as f32 / (width - 4) as f32) * (max_value - 1) as f32 + 1.0) as u8;
         if *current_value == 0{
             *current_value = 1;
         } else if i32::from(*current_value) == max_value + 1 as i32 {
@@ -595,6 +594,7 @@ pub fn render_individual_letters(
             current_x += spacing;
             continue;
         }
+    //println!("{brightness}");
     
     let coloraudio = sdl2::pixels::Color { r: 255, g: 255, b: 255, a: brightness as u8 + 1 };
 

@@ -46,7 +46,7 @@ use comctl::radiobutton;
 
 const WINDOW_WIDTH: i32 = 75;
 const WINDOW_HEIGHT: i32 = 16;
-const NUM_BARS: usize = 75;
+const NUM_BARS: usize = WINDOW_WIDTH as usize;
 
 const SCROLL_SPEED: f64 = 0.75;
 static mut SHIFT_AMOUNT: usize = 0;
@@ -54,13 +54,6 @@ static mut SHIFT_AMOUNT: usize = 0;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Oscilloscope style
-    #[arg(short, long, default_value = "lines")]
-    oscstyle: String, // Change this to String
-
-    /// Spectrum Analyzer style
-    #[arg(short, long, default_value = "normal")]
-    specdraw: String, // Change this to String
 
     /// Name of the custom viscolor.txt file, supports images in the viscolor.txt format as well.
     #[arg(short, long, default_value = "viscolor.txt")]
@@ -74,33 +67,10 @@ struct Args {
     #[arg(short, long, default_value = "7")]
     zoom: i32,
 
-    /// Amplify the incoming signal
-    #[arg(short, long, default_value = "1")]
-    amp: u8,
-
-    /// Specify the visualization mode to use
-    #[arg(short, long, default_value = "0")]
-    mode: u8,
-
-    /// Bandwidth of the Analyzer
-    #[arg(short, long, default_value = "thick")]
-    bandwidth: String,
 
     /* /// Modern Skin style visualization
     #[arg(short, long, default_value = "0")]
     modern: bool,*/
-
-    /// Set peak fall off, ranging from 1 - 5
-    #[arg(long, default_value = "2")]
-    peakfo: u8,
-
-    /// Set analyzer fall off, ranging from 1 - 5
-    #[arg(long, default_value = "3")]
-    barfo: u8,
-
-    /// Enable/Disable peaks
-    #[arg(long, default_value = "1")]
-    peaks: u8,
 
     /// Name of the config file.
     #[arg(short, long, default_value = "rustampvis.ini")]
@@ -125,6 +95,9 @@ struct WinampConfig {
     safalloff: Option<i32>,
     sa_peak_falloff: Option<i32>,
     sa_amp: Option<i32>,
+    vu_peaks: Option<i32>,
+    vu_style: Option<i32>,
+    vu_peak_fall_off: Option<i32>,
     non_visualizer_sections: String, // Store non-visualizer sections as a string
     // Add more fields as needed
 }
@@ -137,6 +110,9 @@ fn winamp_ini(content: &str) -> WinampConfig {
         safalloff: None,
         sa_peak_falloff: None,
         sa_amp: None,
+        vu_peaks: None,
+        vu_style: None,
+        vu_peak_fall_off: None,
         non_visualizer_sections: String::new(),
     };
 
@@ -159,6 +135,9 @@ fn winamp_ini(content: &str) -> WinampConfig {
                     "safalloff" => winamp_config.safalloff = value.parse().ok(),
                     "sa_amp" => winamp_config.sa_amp = value.parse().ok(),
                     "sa_peak_falloff" => winamp_config.sa_peak_falloff = value.parse().ok(),
+                    "vu_peaks" => winamp_config.vu_peaks = value.parse().ok(),
+                    "vu_style" => winamp_config.vu_style = value.parse().ok(),
+                    "vu_peak_fall_off" => winamp_config.vu_peak_fall_off = value.parse().ok(),
                     _ => {}
                 }
             }
@@ -171,14 +150,17 @@ fn winamp_ini(content: &str) -> WinampConfig {
     winamp_config
 }
 
+#[derive(Debug)]
 #[derive(Copy)]
 #[derive(Clone)]
 struct Bar {
-    height: f64,
+    height: i32,
     height2: f64,
     peak: f64,
     gravity: f64,
-    bargrav: f64
+    bargrav: f64,
+    vumeter: i32,
+    vumeterpeak: f32,
 }
 
 fn hamming_window(n: usize) -> Vec<f32> {
@@ -245,6 +227,15 @@ fn switch_bandwidth(bandwidth: &mut String) {
     }
 }
 
+fn switch_vustyle(vudraw: &mut String) {
+    match vudraw.as_str() { // Convert the String to &str for matching
+        "normal" => *vudraw = "fire".to_string(),
+        "fire" => *vudraw = "line".to_string(),
+        "line" => *vudraw = "normal".to_string(),
+        _ => println!("Invalid analyzer style. Supported styles: normal, fire, line."),
+    }
+}
+
 fn linear_interpolation(x: f64, x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     // Ensure x0 is less than x1
     let (x0, x1, y0, y1) = if x0 > x1 {
@@ -288,9 +279,9 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
                 }
 
                 for bar in bars_chunk.iter_mut().take(4) {
-                    bar.height = sum / (25.0 * 2.0);
-                    if bar.height >= 15.0 {
-                        bar.height = 15.0;
+                    bar.height = sum as i32 / (25.0 * 2.0) as i32;
+                    if bar.height >= 15 {
+                        bar.height = 15;
                     }
                 }
             }
@@ -307,9 +298,9 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
                 }
 
                 for bar in bars_chunk.iter_mut() {
-                    bar.height = sum / (7.0 * 2.0);
-                    if bar.height >= 15.0 {
-                        bar.height = 15.0;
+                    bar.height = sum as i32 / (7.0 * 2.0) as i32;
+                    if bar.height >= 15 {
+                        bar.height = 15;
                     }
                 }
             }
@@ -322,15 +313,15 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
 
         // Set the height of bars based on the shifted debug vector
         for (bar, &debug_value) in bars.iter_mut().zip(debug_vector.iter()) {
-            bar.height = debug_value;
+            bar.height = debug_value as i32;
         }
     }
 
     for i in 0..NUM_BARS {
         bars[i].height2 -= bars[i].bargrav + bvalue;
 
-        if bars[i].height2 <= bars[i].height {
-            bars[i].height2 = bars[i].height;
+        if bars[i].height2 <= bars[i].height as f64 {
+            bars[i].height2 = bars[i].height as f64;
         if debug{
             if bars[i].height2 > bars[i].peak {
                 bars[i].gravity = 0.0;
@@ -345,7 +336,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
                     // Offset peak by -1
                     bars[i].peak -= 0.25;
                 }
-                if (bars[i].peak >= 0.0) && (bars[i].peak <= 1.0){
+                if bars[i].peak == 0.0 {
                     bars[i].peak = -3.0;
                 }
             }
@@ -373,7 +364,7 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
                 // set peak to 14.0 after bars hit value 15
                 bars[i].peak = 14.0;
             }
-            if (bars[i].peak >= 0.0) && (bars[i].peak <= 1.0){
+            if bars[i].peak == 0.0 {
                 bars[i].peak = -3.0;
             }
             //println!("{}, {}", bars[i].peak, i);
@@ -407,25 +398,34 @@ fn draw_visualizer(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     _colors: &[Color],
     osc_colors: &[Color],
+    vu_color: &[Color],
     peak_color: Color,
     ys: &[f32],
+    ys1: &[f32],
+    ys2: &[f32],
     fft: &[f32],
     oscstyle: &str,
     specdraw: &str,
+    vudraw: &str,
     mode: u8,
     bandwidth: &str,
     zoom: i32,
     bars: &mut [Bar],
     peakfo: u8,
+    vu_peak_fall_off: u8,
     barfo: u8,
     peaks: Arc<Mutex<u8>>,
+    vu_peaks: Arc<Mutex<u8>>,
     amp: u8,
     debug: bool,
     debug_vector: Vec<f64>,
 ) {
     let peaks_unlocked = peaks.lock().unwrap();
+    let vu_peaks_unlocked = vu_peaks.lock().unwrap();
     let xs: Vec<i32> = (0..75).collect();
-    let ys: Vec<i32> = ys.iter().step_by(16).map(|&sample| ((sample * amp as f32 / 8.0) + 7.6) as i32/* * WINDOW_HEIGHT / 16*/).collect(); // cast to i32
+    let ys: Vec<f32> = ys.iter().step_by(8).map(|&sample| ((sample * amp as f32)) as f32/* * WINDOW_HEIGHT / 16*/).collect();
+    let ys1: Vec<f32> = ys1.iter().map(|&sample| ((sample * amp as f32)) as f32/* * WINDOW_HEIGHT / 16*/).collect();
+    let ys2: Vec<f32> = ys2.iter().map(|&sample| ((sample * amp as f32)) as f32/* * WINDOW_HEIGHT / 16*/).collect();   // cast to i32
     let fft: Vec<f64> = fft.iter()
     .map(|&sample| ((sample * amp as f32 / 8.0)) as f64)
     .collect(); // cast to i32
@@ -433,9 +433,13 @@ fn draw_visualizer(
     let mut last_y = 0;
     let mut top: i32;
     let mut bottom: i32;
+    let mut top2: i32;
+    let mut peak1: i32;
+    let mut peak2: i32;
 
     // analyzer stuff
     process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo, barfo, debug, debug_vector);
+    process_audio_data(bars, &mut ys1.iter(), &mut ys2.iter(), vu_peak_fall_off);
 
     for x in 0..75 {
         for y in 0..16 {
@@ -454,6 +458,8 @@ fn draw_visualizer(
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x = *x;
             let y = *y;
+
+            let y: i32 = ((y / 8.0) + 7.6) as i32;
     
             let x = std::cmp::min(std::cmp::max(x, 0), 75 - 1);
             let y = std::cmp::min(std::cmp::max(y, 0), 16 - 1);
@@ -514,7 +520,7 @@ fn draw_visualizer(
             let y = -bar.height2 as i32 + 15;
             
                 top = y + 1;
-                bottom = 16;
+                bottom = 15;
 
             for dy in top..=bottom {
                 let color_index: usize;
@@ -539,7 +545,7 @@ fn draw_visualizer(
         }
         for (i, bar) in bars.iter().enumerate() {
             let bar_x = i as i32 * zoom as i32;
-            let bar_height = -bar.peak + 15.99999999;
+            let bar_height = -bar.peak + 15.0;
             let peaki32: i32 = bar_height as i32;
 
             let rect = Rect::new(
@@ -571,11 +577,136 @@ fn draw_visualizer(
                 canvas.fill_rect(rect).unwrap();
             }
         }  
+    } else if mode == 3{
+
+        for i in 0..75{
+            let num = bars[i].vumeter;
+            //println!("{i}, {num}");
+        }
+
+        top = -bars[0].vumeter as i32;
+        top2 = -bars[1].vumeter as i32;
+        bottom = 75;
+
+        peak1 = -bars[0].vumeterpeak as i32 - 1;
+        peak2 = -bars[1].vumeterpeak as i32 - 1;
+
+        for dy in top..=bottom {
+            let mut color_index: usize;
+                if vudraw == "fire" {
+                    color_index = ((-dy + top - 17) as usize) % vu_color.len();
+                } else if vudraw == "normal" {
+                    color_index = (-dy as usize) % vu_color.len();
+                } else if vudraw == "line" {
+                    color_index = (-top as usize) % vu_color.len();
+                } else {
+                    color_index = 0;
+                }
+            let bar_color = vu_color[color_index];
+            let rect = Rect::new((-dy) * zoom, 1 * zoom, zoom as u32, 7 * zoom as u32);
+            //let rect2 = Rect::new((-dy) * zoom, 9 * zoom, zoom as u32, 7 * zoom as u32);
+            canvas.set_draw_color(bar_color);
+            canvas.fill_rect(rect).unwrap();
+        }
+
+        for dy in top2..=bottom {
+            let mut color_index: usize;
+                if vudraw == "fire" {
+                    color_index = ((-dy + top2 - 17) as usize) % vu_color.len();
+                } else if vudraw == "normal" {
+                    color_index = (-dy as usize) % vu_color.len();
+                } else if vudraw == "line" {
+                    color_index = (-top2 as usize) % vu_color.len();
+                } else {
+                    color_index = 0;
+                }
+            let bar_color = vu_color[color_index];
+            let rect = Rect::new((-dy) * zoom, 9 * zoom, zoom as u32, 7 * zoom as u32);
+            canvas.set_draw_color(bar_color);
+            canvas.fill_rect(rect).unwrap();
+        }
+
+        for dy in peak1..=bottom {
+            let color = peak_color;
+            let rect = Rect::new((-peak1) * zoom, 1 * zoom, zoom as u32, 7 * zoom as u32);
+            canvas.set_draw_color(color);
+            if *vu_peaks_unlocked == 1 {
+                canvas.fill_rect(rect).unwrap();
+            } else {
+                //println!("SORRY NOTHING");
+            }
+        }
+
+        for dy in peak2..=bottom {
+            let color = peak_color;
+            let rect = Rect::new((-peak2) * zoom, 9 * zoom, zoom as u32, 7 * zoom as u32);
+            canvas.set_draw_color(color);
+            if *vu_peaks_unlocked == 1 {
+                canvas.fill_rect(rect).unwrap();
+            } else {
+                //println!("SORRY NOTHING");
+            }
+        }
     } else if mode == 0{
-    }  
+    }
 }
 
-fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_index: Option<usize>) {
+fn calculate_rms(samples: &[f32]) -> f32 {
+    // Calculate the average of the initial 100 samples
+    let take: i32 = 386;
+    let baseline: f32 = samples.iter().take(take as usize).cloned().sum::<f32>() / take as f32;
+
+    // Subtract the baseline from all new readings, square the result, and calculate the average
+    let squared_diff_sum: f32 = samples
+        .iter()
+        .skip(1)
+        .map(|&reading| (reading - baseline).powi(2))
+        .sum();
+
+    let mean_squared_diff = squared_diff_sum / (samples.len() - 100) as f32;
+
+    // Take the square root to get the RMS value
+    let rms = mean_squared_diff.sqrt();
+
+    rms
+}
+
+fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mut std::slice::Iter<f32>, vu_peak_fall_off: u8) {
+    // Calculate RMS values for the first 75 samples for ys and ys2
+    let rms_ys = calculate_rms(&ys.map(|&x| x).collect::<Vec<_>>());
+    let rms_ys2 = calculate_rms(&ys2.map(|&x| x).collect::<Vec<_>>());
+
+
+    // Update the second entry of vumeter field
+    bars[0].vumeter = rms_ys as i32 - 1;
+    if bars[0].vumeter >= 74 {
+        bars[0].vumeter = 74;
+    }
+    bars[1].vumeter = rms_ys2 as i32 - 1;
+    if bars[1].vumeter >= 74 {
+        bars[1].vumeter = 74;
+    }
+
+    for i in 0..NUM_BARS {
+        bars[i].vumeterpeak -= vu_peak_fall_off as f32 / 1.25;
+
+        if bars[i].vumeterpeak <= bars[i].vumeter as f32 {
+            bars[i].vumeterpeak = bars[i].vumeter as f32;
+        }
+
+        if bars[i].vumeterpeak >= 73.0 {
+            bars[i].vumeterpeak = 73.0;
+        }
+
+        if bars[i].vumeterpeak == -1.0 {
+            bars[i].vumeterpeak = -3.0;
+        }
+    }
+
+    bars[2].vumeter = bars[0].vumeter + bars[1].vumeter / 2.0 as i32;
+}
+
+fn audio_stream_loop(tx: Sender<Vec<f32>>, tx_l: Sender<Vec<f32>>, tx_r: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_index: Option<usize>) {
     enum ConfigType {
         WindowsOutput(cpal::SupportedStreamConfig),
         WindowsInput(cpal::SupportedStreamConfig),
@@ -622,7 +753,10 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_
     }
 
     // ring buffer (VecDeque)
-    let mut ring_buffer: VecDeque<f32> = VecDeque::with_capacity(2048); //HAHA SCREW YOU WASAPI, NOW YOU WILL NOT COMPLAIN
+    let mut ring_buffer: VecDeque<f32> = VecDeque::with_capacity(593); //ironically the WASAPI buffer is apparently 2048 anyway...?
+
+    let mut ring_buffer_left: VecDeque<f32> = VecDeque::with_capacity(2048);
+    let mut ring_buffer_right: VecDeque<f32> = VecDeque::with_capacity(2048);
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
@@ -630,35 +764,62 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_
 
     let callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         // Convert f32 samples and collect them into a Vec<f32>
-        let left: Vec<f32> = data
-            .iter()
-            .map(|&sample| (((-sample)) * 127.5))
-            .collect();
+    let left: Vec<f32> = data
+        .iter()
+        .step_by(2)
+        .map(|&sample| (((-sample)) * 127.5))
+        .collect();
 
-        let right: Vec<f32> = data
-            .iter()
-            .skip(1)
-            .map(|&sample| (((-sample)) * 127.5))
-            .collect();
+    let right: Vec<f32> = data
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|&sample| (((-sample)) * 127.5))
+        .collect();
 
-        let mixed: Vec<f32> = left
-            .iter()
-            .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 2.0)))
-            .collect();
+    let left_fft: Vec<f32> = data
+        .iter()
+        .map(|&sample| (((-sample)) * 127.5))
+        .collect();
 
-        let mixed_fft: Vec<f32> = left
-            .iter()
-            .zip(right.iter())
-            .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 12.0)))
-            .collect();
+    let right_fft: Vec<f32> = data
+        .iter()
+        .skip(1)
+        .map(|&sample| (((-sample)) * 127.5))
+        .collect();
+        
+    let mixed: Vec<f32> = left
+        .iter()
+        .zip(right.iter())
+        .map(|(left_sample, right_sample)| (((*left_sample + *right_sample) / 2.0)))
+        .collect();
 
+    let mixed_fft: Vec<f32> = left_fft
+        .iter()
+        .zip(right_fft.iter())
+        .map(|(left_sample_fft, right_sample_fft)| (*left_sample_fft + *right_sample_fft) / 12.0)
+        .collect();
+    
         // Extend the ring buffer with the new samples
         for mixed in &mixed {
             if ring_buffer.len() == ring_buffer.capacity() {
                 ring_buffer.pop_front(); // Remove the oldest sample when the buffer is full
             }
             ring_buffer.push_back(*mixed);
+        }
+
+        for left_sample in &left {
+            if ring_buffer_left.len() == ring_buffer_left.capacity() {
+                ring_buffer_left.pop_back(); // Remove the oldest sample when the buffer is full
+            }
+            ring_buffer_left.push_front(*left_sample);
+        }
+
+        for right_sample in &right {
+            if ring_buffer_right.len() == ring_buffer_right.capacity() {
+                ring_buffer_right.pop_back(); // Remove the oldest sample when the buffer is full
+            }
+            ring_buffer_right.push_front(*right_sample);
         }
 
         // Apply the Hamming window to mixed_fft
@@ -743,6 +904,22 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, s: Sender<Vec<f32>>, selected_device_
             Err(_err) => {
             }
         }
+
+        match tx_l.send(ring_buffer_left.iter().copied().collect()) {
+            Ok(_) => {
+                // Send successful
+            }
+            Err(_err) => {
+            }
+        }
+
+        match tx_r.send(ring_buffer_right.iter().copied().collect()) {
+            Ok(_) => {
+                // Send successful
+            }
+            Err(_err) => {
+            }
+        }
         
         match s.send(amplitudes.iter().copied().collect()) {
             Ok(_) => {
@@ -774,7 +951,8 @@ fn draw_window(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     cgenex: &[Color],
     texture_creator: &TextureCreator<WindowContext>,
-    font: &sdl2::ttf::Font,
+    tahoma: &sdl2::ttf::Font,
+    tahoma_bold: &sdl2::ttf::Font,
     marlett: &sdl2::ttf::Font,
     oscstyle: Arc<Mutex<String>>,
     mode: u8,
@@ -783,9 +961,13 @@ fn draw_window(
     mx: &mut i32,
     my: &mut i32,
     peaks: Arc<Mutex<u8>>,
+    vu_peaks: Arc<Mutex<u8>>,
     specdraw: Arc<Mutex<String>>,
+    vu_style: Arc<Mutex<String>>,
+    vu_style_num: Arc<Mutex<i32>>,
     bandwidth: Arc<Mutex<String>>,
     mut peakfo: &mut u8,
+    mut vupeakfo: &mut u8,
     mut barfo: &mut u8,
     mut amp: &mut u8,
     scroll: f64,
@@ -801,7 +983,9 @@ fn draw_window(
 /*     let specdraw_mutex = Arc::new(Mutex::new(specdraw.to_string()));
     let oscstyle_mutex = Arc::new(Mutex::new(oscstyle.to_string()));
     let bandwidth_mutex = bandwidth.lock().unwrap(); */
-    let br: f64 = ys[5].height2 * 16.99;
+    let mut vu_style_mutex = vu_style_num.lock().unwrap();
+    let br: f64 = (ys[2].vumeter + 1) as f64 * 2.27;
+    //println!("{ys:?}");
 
     //println!("{}", br as u8);
 
@@ -811,7 +995,10 @@ fn draw_window(
         visstatus = "Spectrum Analyzer".to_string();
     } else if mode == 2 {
         visstatus = "Oscilloscope".to_string();
+    } else if mode == 3 {
+        visstatus = "VU Meter".to_string();
     }
+
     let rect = Rect::new(0, 0, 606, 592);
     canvas.set_draw_color(cgenex[2]);
     canvas.fill_rect(rect).unwrap();
@@ -835,52 +1022,52 @@ fn draw_window(
     let gbinfo3: String = "Oscilloscope drawing".to_string();
     let vis_text = &visstatus;
 
-    tab(canvas, cgenex, 187, 8, &tabtext, font, texture_creator)?;
+    render_text(canvas, tahoma_bold, "Skins", cgenex[4], 42, 12, texture_creator)?;
+    render_text(canvas, tahoma, "Classic Skins", cgenex[4], 62, 28, texture_creator)?;
 
-/*         //tab
-        canvas.set_draw_color(cgenex[5]);
-        let rect = Rect::new(187, 8, 116, 21);
-        canvas.draw_rect(rect).unwrap();
-        canvas.set_draw_color(cgenex[10]);
-        let rect = Rect::new(188, 9, 114, 19);
-        canvas.fill_rect(rect).unwrap();
-        render_text(canvas, font, &tabtext, cgenex[1], 197, 11, texture_creator)?; */
+    tab(canvas, cgenex, 187, 8, &tabtext, tahoma, texture_creator)?;
 
-    groupbox(canvas, &groupboxtext1, font, texture_creator, cgenex, 195, 37, 384, 125)?;
-    groupbox(canvas, &groupboxtext2, font, texture_creator, cgenex, 195, 170, 384, 153)?;
-    groupbox(canvas, &groupboxtext3, font, texture_creator, cgenex, 195, 333, 384, 46)?;
-    groupbox(canvas, "Device in use:", font, texture_creator, cgenex, 195, 388, 384, 46)?;
-    render_text(canvas, font, device_in_use, cgenex[4], 209, 409, texture_creator)?;
+    groupbox(canvas, &groupboxtext1, tahoma, texture_creator, cgenex, 195, 37, 384, 125)?;
+    groupbox(canvas, &groupboxtext2, tahoma, texture_creator, cgenex, 195, 170, 384, 153)?;
+    groupbox(canvas, &groupboxtext3, tahoma, texture_creator, cgenex, 195, 333, 384, 46)?;
+    groupbox(canvas, "VU Meter Options", tahoma, texture_creator, cgenex, 195, 388, 384, 125)?;
+    checkbox(canvas, cgenex, 206, 435, "Show Peaks", tahoma, marlett, texture_creator, vu_peaks.clone(), is_button_clicked, mx, my)?;
+    render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 210, 458, texture_creator)?;
+    slider_small(canvas, cgenex, 133, 44, 210, 485, texture_creator, &mut vupeakfo, 5, image_path, is_button_clicked, mx, my)?;
+    groupbox(canvas, "Device in use:", tahoma, texture_creator, cgenex, 195, 520, 384, 46)?;
+    render_text(canvas, tahoma, device_in_use, cgenex[4], 209, 540, texture_creator)?;
+    render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 409, texture_creator)?;
+    radiobutton(canvas, cgenex, 297, 410, "Normal;Fire;Line", tahoma, marlett, texture_creator, vu_style.clone(), is_button_clicked, *mx, *my)?;
 
     //println!("{}", device_in_use);
 
-    render_text(canvas, font, vis_text, cgenex[1], 212, 108, texture_creator)?;
-    render_text(canvas, font, &gbinfo1, cgenex[4], 206, 193, texture_creator)?;
-    render_text(canvas, font, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
-    render_text(canvas, font, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
+    render_text(canvas, tahoma, vis_text, cgenex[1], 212, 108, texture_creator)?;
+    render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 192, texture_creator)?;
+    render_text(canvas, tahoma, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
+    render_text(canvas, tahoma, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
 
-    render_individual_letters(canvas, font, "RustampVis", cgenex[4], 10, 464, scroll, 5, texture_creator, sdl2::rect::Rect::new(164, 88, 164, 88), br)?;
+    render_individual_letters(canvas, tahoma, "RustampVis", cgenex[4], 10, 464, scroll + ys[0].height2 * 2.0, 5, texture_creator, sdl2::rect::Rect::new(164, 88, 164, 88), br)?;
 
-    checkbox(canvas, cgenex, 206, 237, "Show Peaks", font, marlett, texture_creator, peaks.clone(), is_button_clicked, mx, my)?;
+    checkbox(canvas, cgenex, 206, 237, "Show Peaks", tahoma, marlett, texture_creator, peaks.clone(), is_button_clicked, mx, my)?;
 
-    render_text(canvas, font, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
+    render_text(canvas, tahoma, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
     slider_small(canvas, cgenex, 133, 44, 209, 289, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
-    render_text(canvas, font, "Peak falloff speed:", cgenex[4], 375, 264, texture_creator)?;
+    render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 375, 264, texture_creator)?;
     slider_small(canvas, cgenex, 133, 44, 375, 289, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
 
-    render_text(canvas, font, "Gain:", cgenex[4], 209, 137, texture_creator)?;
+    render_text(canvas, tahoma, "Gain:", cgenex[4], 209, 137, texture_creator)?;
     slider_small(canvas, cgenex, 260, 44, 280, 140, texture_creator, &mut amp, 15, image_path, is_button_clicked, mx, my)?;
 
-    render_text(canvas, font, &amp_str, cgenex[4], 552, 137, texture_creator)?;
-    button(canvas, cgenex, 10, 563, 165, 22, "Close", font, texture_creator, image_path, is_button_clicked, *mx, *my)?;
+    render_text(canvas, tahoma, &amp_str, cgenex[4], 552, 137, texture_creator)?;
+    button(canvas, cgenex, 10, 563, 165, 22, "Close", tahoma, texture_creator, image_path, is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", font, marlett, texture_creator, specdraw.clone(), is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", tahoma, marlett, texture_creator, specdraw.clone(), is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", font, marlett, texture_creator, bandwidth.clone(), is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", tahoma, marlett, texture_creator, bandwidth.clone(), is_button_clicked, *mx, *my)?;
 
-    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", font, marlett, texture_creator, oscstyle.clone(), is_button_clicked, *mx, *my)?;
+    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", tahoma, marlett, texture_creator, oscstyle.clone(), is_button_clicked, *mx, *my)?;
     // Use the split_lines_and_create_textures function for classivis
-    let tex2 = newline_handler(&classivis, font, texture_creator, cgenex[4])?;
+    let tex2 = newline_handler(&classivis, tahoma, texture_creator, cgenex[4])?;
 
     // Draw tex2
     let mut y = 56;
@@ -922,6 +1109,18 @@ fn draw_window(
         config_content = config_content.replace(&sa_peaks_str, &format!("sa_peaks={}", *peaks.lock().unwrap()));
         //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
     }
+
+    let vu_peaks_str = format!("vu_peaks={}", winamp_config.vu_peaks.unwrap_or_default());
+    if config_content.contains(&vu_peaks_str) {
+        config_content = config_content.replace(&vu_peaks_str, &format!("vu_peaks={}", *vu_peaks.lock().unwrap()));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
+
+    let vu_peak_fall_off_str = format!("vu_peak_fall_off={}", winamp_config.vu_peak_fall_off.unwrap_or_default());
+    if config_content.contains(&vu_peak_fall_off_str) {
+        config_content = config_content.replace(&vu_peak_fall_off_str, &format!("vu_peak_fall_off={}", *vupeakfo - 1));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
       
     // Update config_safire based on user input and other conditions
     if *bandwidth.lock().unwrap() == "thin" {
@@ -946,11 +1145,24 @@ fn draw_window(
         _ => println!("Invalid analyzer style."),
     }
 
+    match vu_style.lock().unwrap().as_str() {
+        "normal" => *vu_style_mutex = 0,
+        "fire" => *vu_style_mutex = 1,
+        "line" => *vu_style_mutex = 2,
+        _ => println!("Invalid analyzer style."),
+    }
+
     // Update config_content based on the modified config_safire
     let safire_str = format!("safire={}", winamp_config.safire.unwrap_or_default());
     if config_content.contains(&safire_str) {
         config_content = config_content.replace(&safire_str, &format!("safire={}", safire));
         //println!("wac_safire: {:?}, config_safire: {}", winamp_config.safire, safire);
+    }
+
+    let vu_style_str = format!("vu_style={}", winamp_config.vu_style.unwrap_or_default());
+    if config_content.contains(&vu_style_str) {
+        config_content = config_content.replace(&vu_style_str, &format!("vu_style={}", vu_style_mutex));
+        //println!("wac_vu_style: {:?}, vu_style: {}", winamp_config.vu_style, vu_style_mutex);
     }
 
     // Check if any changes were made before writing to the file
@@ -1037,6 +1249,21 @@ fn draw_diag(
     Ok(())
 }
 
+fn get_device_name_by_index(index: usize) -> Option<String> {
+    let host = cpal::default_host();
+    let input_devices = host.input_devices().ok()?;
+    let output_devices = host.output_devices().ok()?;
+    let all_devices = input_devices.chain(output_devices);
+
+    for (device_index, device) in all_devices.enumerate() {
+        if device_index == index {
+            return Some(device.name().unwrap_or_else(|_| "Unknown Device".to_string()));
+        }
+    }
+
+    None
+}
+
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
@@ -1044,11 +1271,19 @@ fn main() -> Result<(), String> {
 
     let selected_device_index = match args.device {
         Some(index) => {
+            // COMMAND LINE ARGUMENT
             if index == 0 {
                 eprintln!("Device index should start from 1.");
                 std::process::exit(1);
             }
-            device_in_use = format!("{}.", index);
+    
+            if let Some(device_name) = get_device_name_by_index(index - 1) {
+                device_in_use = format!("{}. {}", index, device_name);
+            } else {
+                eprintln!("Device with index {} not found.", index);
+                std::process::exit(1);
+            }
+    
             index - 1
         }
         None => {
@@ -1061,7 +1296,7 @@ fn main() -> Result<(), String> {
             // Access the selected index and name
             let selected_device_index = selection.as_ref().unwrap().index;
             let selected_device_name = &selection.as_ref().unwrap().name;
-            device_in_use = format!("{}. {}", selected_device_index, selected_device_name);
+            device_in_use = format!("{}. {}", selected_device_index + 1, selected_device_name);
 
             selected_device_index
         }
@@ -1073,35 +1308,47 @@ fn main() -> Result<(), String> {
     debug_vector[0] = 15.0;
     
     // handle args
-    let oscstyle = Arc::new(Mutex::new(args.oscstyle)); // Convert String to &str
-    let specdraw = Arc::new(Mutex::new(args.specdraw));
+    let oscstyle = Arc::new(Mutex::new("lines".to_string())); // Convert String to &str
+    let specdraw = Arc::new(Mutex::new("normal".to_string()));
+    let vudraw = Arc::new(Mutex::new("normal".to_string()));
     let zoom = args.zoom;
-    let amp = Arc::new(Mutex::new(args.amp));
-    let mut mode = args.mode;
-    let bandwidth = Arc::new(Mutex::new(args.bandwidth));
-    let peakfo = Arc::new(Mutex::new(args.peakfo));
-    let barfo = Arc::new(Mutex::new(args.barfo));
-    let peaks = Arc::new(Mutex::new(args.peaks));
+    let amp = Arc::new(Mutex::new(1));
+    let mut mode = 1;
+    let bandwidth = Arc::new(Mutex::new("thick".to_string()));
+    let peakfo = Arc::new(Mutex::new(1));
+    let barfo = Arc::new(Mutex::new(2));
+    let peaks = Arc::new(Mutex::new(1));
+    let vu_peaks = Arc::new(Mutex::new(1));
+    let vu_style_num = Arc::new(Mutex::new(0));
+    let vu_peak_fall_off = Arc::new(Mutex::new(2));
 
     let mut peakfo_unlocked = peakfo.lock().unwrap();
     let mut barfo_unlocked = barfo.lock().unwrap();
     let mut amp_unlocked = amp.lock().unwrap();
+
+    let mut vupeakfo_unlocked = vu_peak_fall_off.lock().unwrap();
     //let mut peaks_unlocked = peaks.lock().unwrap();
 
     if args.debug == true {
         println!("debug");
     }
 
-    if args.peakfo <= 1 {
+    if *peakfo_unlocked <= 1 {
         *peakfo_unlocked = 1;
-    } else if args.peakfo >= 5 {
+    } else if *peakfo_unlocked >= 5 {
         *peakfo_unlocked = 5;
     }
 
-    if args.barfo <= 1 {
+    if *barfo_unlocked <= 1 {
         *barfo_unlocked = 1;
-    } else if args.barfo >= 5 {
+    } else if *barfo_unlocked >= 5 {
         *barfo_unlocked = 5;
+    }
+
+    if *vupeakfo_unlocked <= 1 {
+        *vupeakfo_unlocked = 1;
+    } else if *vupeakfo_unlocked >= 5 {
+        *vupeakfo_unlocked = 5;
     }
 
     // Extract the configuration file path from the command-line arguments
@@ -1126,12 +1373,18 @@ fn main() -> Result<(), String> {
     let safalloff = winamp_config.safalloff.unwrap_or_default();
     let sa_peak_falloff = winamp_config.sa_peak_falloff.unwrap_or_default();
     let sa_amp = winamp_config.sa_amp.unwrap_or_default();
+    let vupeaks = winamp_config.vu_peaks.unwrap_or_default();
+    let vu_peak_fall_off_c = winamp_config.vu_peak_fall_off.unwrap_or_default();
+    let vu_style = winamp_config.vu_style.unwrap_or_default();
+    *vu_style_num.lock().unwrap() = vu_style;
 
     *barfo_unlocked = safalloff as u8 + 1;
     *peakfo_unlocked = sa_peak_falloff as u8 + 1;
     mode = sa as u8;
     *amp_unlocked = sa_amp as u8;
     *peaks.try_lock().unwrap() = sa_peaks as u8;
+    *vupeakfo_unlocked = vu_peak_fall_off_c as u8 + 1;
+    *vu_peaks.try_lock().unwrap() = vupeaks as u8;
     if (safire & (1 << 5)) != 0 {
         *bandwidth.lock().unwrap() = "thin".to_string();
     }
@@ -1150,14 +1403,26 @@ fn main() -> Result<(), String> {
         _ => println!("Invalid analyzer style in config_safire."),
     }
     println!("Loaded Spectrum Analyzer style: {}", specdraw.lock().unwrap().as_str());
+
+    match vu_style & 3 {
+        0 => *vudraw.lock().unwrap() = "normal".to_string(),
+        1 => *vudraw.lock().unwrap() = "fire".to_string(),
+        2 => *vudraw.lock().unwrap() = "line".to_string(),
+        _ => println!("Invalid analyzer style in config_safire."),
+    }
+    println!("Loaded VU Meter style: {}", *vudraw.lock().unwrap());
     //config_sa_peaks = *peaks_unlocked != 0;
 
+    let mut aat: bool = false;
+
     let mut bars = [Bar {
-        height: 0.0,
+        height: 0,
         height2: 0.0,
         peak: 0.0,
         gravity: 0.0,
-        bargrav: 0.0, /* *barfo_unlocked as f64 / 3.0*/
+        bargrav: 0.0,
+        vumeter: 0,
+        vumeterpeak: 0.0,
     }; NUM_BARS];
 
     let mut mouse_x: i32 = 0;
@@ -1188,15 +1453,18 @@ fn main() -> Result<(), String> {
     let ttf_context = sdl2::ttf::init().unwrap();
     let texture_creator = canvas2.texture_creator();
     let font_path: &str;
+    let font_path_bold: &str;
     let vectorgfx_path: &str;
     let vectorgfx_size: u16;
     
     if cfg!(windows) {
         font_path = "C:\\Windows\\fonts\\tahoma.ttf";
+        font_path_bold = "C:\\Windows\\fonts\\tahomabd.ttf";
         vectorgfx_path = "C:\\Windows\\fonts\\marlett.ttf";
         vectorgfx_size = 15;
     } else if cfg!(unix) {
         font_path = "font/tahoma.ttf";
+        font_path_bold = "font/tahomabd.ttf";
         vectorgfx_path = "font/marlett.ttf";
         vectorgfx_size = 15;
     } else {
@@ -1206,10 +1474,13 @@ fn main() -> Result<(), String> {
     
     let mut font = ttf_context.load_font(font_path, 11)
         .map_err(|err| format!("failed to load font: {}", err))?;
+    let mut font_bold = ttf_context.load_font(font_path_bold, 11)
+    .map_err(|err| format!("failed to load font: {}", err))?;
     let mut vectorgfx = ttf_context.load_font(vectorgfx_path, vectorgfx_size)
         .map_err(|err| format!("failed to load vector graphics font: {}", err))?;
     
     font.set_hinting(sdl2::ttf::Hinting::Mono);
+    font_bold.set_hinting(sdl2::ttf::Hinting::Mono);
     vectorgfx.set_hinting(sdl2::ttf::Hinting::Mono);
 
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -1225,19 +1496,26 @@ fn main() -> Result<(), String> {
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
+    let vuc = vucolor(&viscolors);
 
     let audio_data = Arc::new(Mutex::new(vec![0.0; 4096]));
+    let audio_data_l = Arc::new(Mutex::new(vec![0.0; 4096]));
+    let audio_data_r = Arc::new(Mutex::new(vec![0.0; 4096]));
     let spec_data = Arc::new(Mutex::new(vec![0.0; 4096]));
 
     // Create a blocking receiver to get audio samples from the audio stream loop.
     let (tx, rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
+    let (tx_l, rx_l): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
+    let (tx_r, rx_r): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
     let (s, r): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
 
     let audio_data_clone = Arc::clone(&audio_data);
+    let audio_data_clone_l = Arc::clone(&audio_data_l);
+    let audio_data_clone_r = Arc::clone(&audio_data_r);
     let spec_data_clone = Arc::clone(&spec_data);
 
     // Start the audio stream loop in a separate thread.
-    thread::spawn(move || audio_stream_loop(tx, s, Some(selected_device_index)));
+    thread::spawn(move || audio_stream_loop(tx, tx_l, tx_r, s, Some(selected_device_index)));
 
     thread::spawn(move || {
         loop {
@@ -1245,6 +1523,16 @@ fn main() -> Result<(), String> {
             if let Ok(audio_samples) = rx.recv() {
                 let mut audio_data = audio_data_clone.lock().unwrap();
                 *audio_data = audio_samples;
+            }
+
+            if let Ok(audio_samples_l) = rx_l.recv() {
+                let mut audio_data_l = audio_data_clone_l.lock().unwrap();
+                *audio_data_l = audio_samples_l;
+            }
+
+            if let Ok(audio_samples_r) = rx_r.recv() {
+                let mut audio_data_r = audio_data_clone_r.lock().unwrap();
+                *audio_data_r = audio_samples_r;
             }
 
             if let Ok(spec_samples) = r.recv() {
@@ -1290,17 +1578,26 @@ fn main() -> Result<(), String> {
                         switch_bandwidth(&mut *bandwidth);
                     }
                 }
+                Event::KeyDown { window_id: 2, keycode: Some(Keycode::A), .. } => {
+                    aat = !aat;
+                    canvas.window_mut().set_always_on_top(aat);
+                    println!("Always-On-Top: {aat}");
+                }
+
                 Event::MouseButtonDown { window_id: 2, mouse_btn: MouseButton::Right, .. } => {
                     let mut oscstyle = oscstyle.lock().unwrap();
                     let mut specdraw = specdraw.lock().unwrap();
+                    let mut vudraw = vudraw.lock().unwrap();
                     if mode == 2 {
                         switch_oscstyle(&mut *oscstyle);
                     } else if mode == 1 {
                         switch_specstyle(&mut *specdraw);
+                    } else if mode == 3 {
+                        switch_vustyle(&mut *vudraw);
                     }
                 }
                 Event::MouseButtonDown { window_id: 2, mouse_btn: MouseButton::Left, .. } => {
-                    mode = (mode + 1) % 3;
+                    mode = (mode + 1) % 4;
                     //println!("{mode}")
                 }
                 Event::MouseMotion { window_id: 1, x, y, .. } => {
@@ -1327,17 +1624,20 @@ fn main() -> Result<(), String> {
         }
 
         let audio_data = audio_data.lock().unwrap().clone();
+        let audio_data_l = audio_data_l.lock().unwrap().clone();
+        let audio_data_r = audio_data_r.lock().unwrap().clone();
         let spec_data = spec_data.lock().unwrap().clone();
 
         //println!("Captured audio samples: {:?}", audio_data);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, peakrgb, &audio_data, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *barfo_unlocked, peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &vuc, peakrgb, &audio_data, &audio_data_l, &audio_data_r, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), &*vudraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *vupeakfo_unlocked, *barfo_unlocked, peaks.clone(), vu_peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
         draw_window(
             &mut canvas2,
             &genex_colors,
             &texture_creator,
             &font,
+            &font_bold,
             &vectorgfx,
             oscstyle.clone(),
             mode,
@@ -1346,9 +1646,13 @@ fn main() -> Result<(), String> {
             &mut mouse_x,
             &mut mouse_y,
             peaks.clone(),
+            vu_peaks.clone(),
             specdraw.clone(),
+            vudraw.clone(),
+            vu_style_num.clone(),
             bandwidth.clone(),
             &mut *peakfo_unlocked,
+            &mut *vupeakfo_unlocked,
             &mut *barfo_unlocked,
             &mut *amp_unlocked,
             scroll,
@@ -1399,7 +1703,7 @@ fn prompt_for_device() -> Option<DeviceSelection> {
                 //println!("{}. {}", index, device_name);
                 
                 // Return a struct with both the index and name
-                return Some(DeviceSelection { index: index, name: device_name });
+                return Some(DeviceSelection { index: index - 1, name: device_name });
             } else {
                 println!("Invalid input.");
                 println!("Please select an audio device (1 - {}):", devices.len());
@@ -1456,6 +1760,86 @@ fn peakc(colors: &[Color]) -> Color {
     } else {
         colors[23]
     }
+}
+
+fn vucolor(colors: &[Color]) -> Vec<Color> {
+    vec![
+        colors[17],
+        colors[17],
+        colors[17],
+        colors[17],
+        colors[17],
+        colors[16],
+        colors[16],
+        colors[16],
+        colors[16],
+        colors[16],
+        colors[15],
+        colors[15],
+        colors[15],
+        colors[15],
+        colors[14],
+        colors[14],
+        colors[14],
+        colors[14],
+        colors[14],
+        colors[13],
+        colors[13],
+        colors[13],
+        colors[13],
+        colors[13],
+        colors[12],
+        colors[12],
+        colors[12],
+        colors[12],
+        colors[12],
+        colors[11],
+        colors[11],
+        colors[11],
+        colors[11],
+        colors[10],
+        colors[10],
+        colors[10],
+        colors[10],
+        colors[10],
+        colors[9],
+        colors[9],
+        colors[9],
+        colors[9],
+        colors[9],
+        colors[8],
+        colors[8],
+        colors[8],
+        colors[8],
+        colors[8],
+        colors[7],
+        colors[7],
+        colors[7],
+        colors[7],
+        colors[6],
+        colors[6],
+        colors[6],
+        colors[6],
+        colors[6],
+        colors[5],
+        colors[5],
+        colors[5],
+        colors[5],
+        colors[5],
+        colors[4],
+        colors[4],
+        colors[4],
+        colors[4],
+        colors[4],
+        colors[3],
+        colors[3],
+        colors[3],
+        colors[3],
+        colors[2],
+        colors[2],
+        colors[2],
+        colors[2],
+    ]
 }
 
 fn genex(image_path: &str) -> Vec<Color> {
