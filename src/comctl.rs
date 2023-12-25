@@ -488,27 +488,89 @@ pub fn tab(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     cgenex: &[Color],
     x: i32,
-    y: i32,
-    text: &str,
+    mut y: i32,
+    tabs: &str,
+    prefs_id: &mut i32,
     font: &sdl2::ttf::Font,
     texture_creator: &TextureCreator<WindowContext>,
+    is_button_clicked: bool,
+    mx: &mut i32,
+    my: &mut i32,
 ) -> Result<(), String> {
-    // Calculate the text dimensions
-    let (text_width, text_height) = font.size_of(text).map_err(|e| e.to_string())?;
+    let tab_padding = 7; // padding between tabs
+    let tab_height = 21; // tab height
 
-    // Create texture for the text
-    let surface = font.render(text).solid(cgenex[1]).map_err(|e| e.to_string())?;
-    let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
-    let target = Rect::new(x + 10, y + 3, text_width, text_height);
+    let tab_text: Vec<&str> = tabs.split(';').collect();
 
-    canvas.set_draw_color(cgenex[9]);
-    let rect = Rect::new(x, y, text_width + 20, text_height + 7);
-    canvas.draw_rect(rect).unwrap();
-    canvas.set_draw_color(cgenex[10]);
-    let rect = Rect::new(x + 1, y + 1, text_width + 18, text_height + 5);
-    canvas.fill_rect(rect).unwrap();
+    let mut current_x = x;
 
-    canvas.copy(&texture, None, Some(target))?;
+    for (tab_id, tab_text) in tab_text.iter().enumerate() {
+        // Calculate the text dimensions
+        let (text_width, text_height) = font.size_of(tab_text).map_err(|e| e.to_string())?;
+
+        // Determine background color based on active tab
+        let text_color = if tab_id as i32 == *prefs_id {
+            cgenex[1] // Use a different color for the active tab
+        } else {
+            cgenex[8] // Use the regular color for inactive tabs
+        };
+
+        // Create texture for the text
+        let surface = font.render(tab_text).solid(text_color).map_err(|e| e.to_string())?;
+        let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
+
+        // Calculate the tab dimensions
+        let tab_width = 1 + text_width + 2 * tab_padding;
+
+        // Create rectangles for tab background
+
+        let tab_rect_outer: Rect;
+        let tab_rect_inner: Rect;
+
+        // Calculate text position to center it within the tab
+        let text_x = current_x + tab_padding as i32;
+        let text_y: i32;
+
+        if tab_id as i32 == *prefs_id{
+            tab_rect_outer = Rect::new(current_x, y, tab_width, tab_height);
+            tab_rect_inner = Rect::new(current_x + 1, y + 1, tab_width - 2, tab_height - 2);
+            text_y = y + (tab_height - text_height) as i32 / 2;
+        } else 
+        {
+            tab_rect_outer = Rect::new(current_x, y + 3, tab_width, tab_height - 3);
+            tab_rect_inner = Rect::new(current_x + 1, y + 4, tab_width - 2, tab_height - 5);
+            text_y = y + (tab_height + 4 - text_height) as i32 / 2;
+        }
+
+        // set tab color based on where we are
+        let background_color = if tab_id as i32 == *prefs_id {
+            cgenex[10] // active
+        } else {
+            cgenex[11] // inactive
+        };
+
+        // Draw tab background
+        canvas.set_draw_color(cgenex[9]);
+        canvas.draw_rect(tab_rect_outer).map_err(|e| e.to_string())?;
+        canvas.set_draw_color(background_color);
+        canvas.fill_rect(tab_rect_inner).map_err(|e| e.to_string())?;
+
+        // Draw text on the tab
+        let target = Rect::new(text_x, text_y, text_width, text_height);
+        canvas.copy(&texture, None, Some(target)).map_err(|e| e.to_string())?;
+
+        if mx >= &mut current_x
+        && mx <= &mut (current_x + tab_width as i32)
+        && my >= &mut y
+        && my <= &mut (y + tab_height as i32)
+        && is_button_clicked
+        {
+            *prefs_id = tab_id as i32; // Set the active tab ID
+        }
+
+        // Update the x-coordinate for the next tab
+        current_x += tab_width as i32 + 2;
+    }
 
     Ok(())
 }

@@ -98,6 +98,8 @@ struct WinampConfig {
     vu_peaks: Option<i32>,
     vu_style: Option<i32>,
     vu_peak_fall_off: Option<i32>,
+    prefs_tab: Option<i32>,
+    aot: Option<i32>,
     non_visualizer_sections: String, // Store non-visualizer sections as a string
     // Add more fields as needed
 }
@@ -113,6 +115,8 @@ fn winamp_ini(content: &str) -> WinampConfig {
         vu_peaks: None,
         vu_style: None,
         vu_peak_fall_off: None,
+        prefs_tab: None,
+        aot: None,
         non_visualizer_sections: String::new(),
     };
 
@@ -138,6 +142,8 @@ fn winamp_ini(content: &str) -> WinampConfig {
                     "vu_peaks" => winamp_config.vu_peaks = value.parse().ok(),
                     "vu_style" => winamp_config.vu_style = value.parse().ok(),
                     "vu_peak_fall_off" => winamp_config.vu_peak_fall_off = value.parse().ok(),
+                    "prefs_tab" => winamp_config.prefs_tab = value.parse().ok(),
+                    "aot" => winamp_config.aot = value.parse().ok(),
                     _ => {}
                 }
             }
@@ -977,6 +983,8 @@ fn draw_window(
     config_file_path: String,
     mut safire: i32,
     device_in_use: &String,
+    mut prefs_id: &mut i32,
+    aot: Arc<Mutex<u8>>,
 ) -> Result<(), String> {
     let mut visstatus: String = "".to_string();
     let amp_str: String = amp.to_string();
@@ -1010,9 +1018,8 @@ fn draw_window(
     listview_box(canvas, cgenex, 10, 8, 165, 545)?;
 
     //vis box
-    draw_dropdown(canvas, cgenex, 206, 105, 362, 21)?;
 
-    let tabtext: String = "Classic Visualization".to_string();
+    let tabtext: String = "Classic Visualization;Additional Options".to_string();
     let classivis: String = "Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.".to_string();
     let groupboxtext1: String = "Classic Visualization Settings".to_string();
     let groupboxtext2: String = "Spectrum Analyzer Options".to_string();
@@ -1022,63 +1029,70 @@ fn draw_window(
     let gbinfo3: String = "Oscilloscope drawing".to_string();
     let vis_text = &visstatus;
 
-    render_text(canvas, tahoma_bold, "Skins", cgenex[4], 42, 12, texture_creator)?;
-    render_text(canvas, tahoma, "Classic Skins", cgenex[4], 62, 28, texture_creator)?;
-
-    tab(canvas, cgenex, 187, 8, &tabtext, tahoma, texture_creator)?;
-
-    groupbox(canvas, &groupboxtext1, tahoma, texture_creator, cgenex, 195, 37, 384, 125)?;
-    groupbox(canvas, &groupboxtext2, tahoma, texture_creator, cgenex, 195, 170, 384, 153)?;
-    groupbox(canvas, &groupboxtext3, tahoma, texture_creator, cgenex, 195, 333, 384, 46)?;
-    groupbox(canvas, "VU Meter Options", tahoma, texture_creator, cgenex, 195, 388, 384, 125)?;
-    checkbox(canvas, cgenex, 206, 435, "Show Peaks", tahoma, marlett, texture_creator, vu_peaks.clone(), is_button_clicked, mx, my)?;
-    render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 210, 458, texture_creator)?;
-    slider_small(canvas, cgenex, 133, 44, 210, 485, texture_creator, &mut vupeakfo, 5, image_path, is_button_clicked, mx, my)?;
-    groupbox(canvas, "Device in use:", tahoma, texture_creator, cgenex, 195, 520, 384, 46)?;
-    render_text(canvas, tahoma, device_in_use, cgenex[4], 209, 540, texture_creator)?;
-    render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 409, texture_creator)?;
-    radiobutton(canvas, cgenex, 297, 410, "Normal;Fire;Line", tahoma, marlett, texture_creator, vu_style.clone(), is_button_clicked, *mx, *my)?;
-
-    //println!("{}", device_in_use);
-
-    render_text(canvas, tahoma, vis_text, cgenex[1], 212, 108, texture_creator)?;
-    render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 192, texture_creator)?;
-    render_text(canvas, tahoma, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
-    render_text(canvas, tahoma, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
-
+    tab(canvas, cgenex, 187, 8, &tabtext, &mut prefs_id, tahoma, texture_creator, is_button_clicked, mx, my)?;
+    button(canvas, cgenex, 10, 563, 165, 22, "Close", tahoma, texture_creator, image_path, is_button_clicked, *mx, *my)?;
     render_individual_letters(canvas, tahoma, "RustampVis", cgenex[4], 10, 464, scroll + ys[0].height2 * 2.0, 5, texture_creator, sdl2::rect::Rect::new(164, 88, 164, 88), br)?;
 
-    checkbox(canvas, cgenex, 206, 237, "Show Peaks", tahoma, marlett, texture_creator, peaks.clone(), is_button_clicked, mx, my)?;
+    render_text(canvas, tahoma_bold, "Skins", cgenex[4], 42, 12, texture_creator)?;
+    render_text(canvas, tahoma, "Classic Skins", cgenex[4], 62, 28, texture_creator)?;
+    
+    if *prefs_id == 0 {
 
-    render_text(canvas, tahoma, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
-    slider_small(canvas, cgenex, 133, 44, 209, 289, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
-    render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 375, 264, texture_creator)?;
-    slider_small(canvas, cgenex, 133, 44, 375, 289, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
+        groupbox(canvas, &groupboxtext1, tahoma, texture_creator, cgenex, 195, 37, 384, 125)?;
+        groupbox(canvas, &groupboxtext2, tahoma, texture_creator, cgenex, 195, 170, 384, 153)?;
+        groupbox(canvas, &groupboxtext3, tahoma, texture_creator, cgenex, 195, 333, 384, 46)?;
+        groupbox(canvas, "VU Meter Options", tahoma, texture_creator, cgenex, 195, 388, 384, 125)?;
+        checkbox(canvas, cgenex, 206, 435, "Show Peaks", tahoma, marlett, texture_creator, vu_peaks.clone(), is_button_clicked, mx, my)?;
+        render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 210, 458, texture_creator)?;
+        slider_small(canvas, cgenex, 133, 44, 210, 485, texture_creator, &mut vupeakfo, 5, image_path, is_button_clicked, mx, my)?;
+        groupbox(canvas, "Device in use:", tahoma, texture_creator, cgenex, 195, 520, 384, 46)?;
+        render_text(canvas, tahoma, device_in_use, cgenex[4], 209, 540, texture_creator)?;
+        render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 409, texture_creator)?;
+        radiobutton(canvas, cgenex, 297, 410, "Normal;Fire;Line", tahoma, marlett, texture_creator, vu_style.clone(), is_button_clicked, *mx, *my)?;
 
-    render_text(canvas, tahoma, "Gain:", cgenex[4], 209, 137, texture_creator)?;
-    slider_small(canvas, cgenex, 260, 44, 280, 140, texture_creator, &mut amp, 15, image_path, is_button_clicked, mx, my)?;
-
-    render_text(canvas, tahoma, &amp_str, cgenex[4], 552, 137, texture_creator)?;
-    button(canvas, cgenex, 10, 563, 165, 22, "Close", tahoma, texture_creator, image_path, is_button_clicked, *mx, *my)?;
-
-    radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", tahoma, marlett, texture_creator, specdraw.clone(), is_button_clicked, *mx, *my)?;
-
-    radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", tahoma, marlett, texture_creator, bandwidth.clone(), is_button_clicked, *mx, *my)?;
-
-    radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", tahoma, marlett, texture_creator, oscstyle.clone(), is_button_clicked, *mx, *my)?;
-    // Use the split_lines_and_create_textures function for classivis
-    let tex2 = newline_handler(&classivis, tahoma, texture_creator, cgenex[4])?;
-
-    // Draw tex2
-    let mut y = 56;
-    for texture in tex2 {
-        let texture_query = texture.query(); // Get the TextureQuery struct
-        let w = texture_query.width;
-        let h = texture_query.height;
-        let target2 = Rect::new(206 as i32, y as i32, w, h);
-        canvas.copy(&texture, None, Some(target2))?;
-        y += h as i32;
+        // vis box
+        draw_dropdown(canvas, cgenex, 206, 105, 362, 21)?;
+        render_text(canvas, tahoma, vis_text, cgenex[1], 212, 108, texture_creator)?;
+        render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 192, texture_creator)?;
+        render_text(canvas, tahoma, &gbinfo2, cgenex[4], 206, 216, texture_creator)?;
+        render_text(canvas, tahoma, &gbinfo3, cgenex[4], 206, 354, texture_creator)?;
+    
+        checkbox(canvas, cgenex, 206, 237, "Show Peaks", tahoma, marlett, texture_creator, peaks.clone(), is_button_clicked, mx, my)?;
+    
+        render_text(canvas, tahoma, "Falloff speed:", cgenex[4], 209, 264, texture_creator)?;
+        slider_small(canvas, cgenex, 133, 44, 209, 289, texture_creator, &mut barfo, 5, image_path, is_button_clicked, mx, my)?;
+        render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 375, 264, texture_creator)?;
+        slider_small(canvas, cgenex, 133, 44, 375, 289, texture_creator, &mut peakfo, 5, image_path, is_button_clicked, mx, my)?;
+    
+        render_text(canvas, tahoma, "Gain:", cgenex[4], 209, 137, texture_creator)?;
+        slider_small(canvas, cgenex, 260, 44, 280, 140, texture_creator, &mut amp, 15, image_path, is_button_clicked, mx, my)?;
+    
+        render_text(canvas, tahoma, &amp_str, cgenex[4], 552, 137, texture_creator)?;
+    
+        radiobutton(canvas, cgenex, 297, 192, "Normal;Fire;Line", tahoma, marlett, texture_creator, specdraw.clone(), is_button_clicked, *mx, *my)?;
+    
+        radiobutton(canvas, cgenex, 297, 216, "Thin;Thick", tahoma, marlett, texture_creator, bandwidth.clone(), is_button_clicked, *mx, *my)?;
+    
+        radiobutton(canvas, cgenex, 350, 355, "Dots;Lines;Solid", tahoma, marlett, texture_creator, oscstyle.clone(), is_button_clicked, *mx, *my)?;
+        // Use the split_lines_and_create_textures function for classivis
+        let tex2 = newline_handler(&classivis, tahoma, texture_creator, cgenex[4])?;
+    
+        // Draw tex2
+        let mut y = 56;
+        for texture in tex2 {
+            let texture_query = texture.query(); // Get the TextureQuery struct
+            let w = texture_query.width;
+            let h = texture_query.height;
+            let target2 = Rect::new(206 as i32, y as i32, w, h);
+            canvas.copy(&texture, None, Some(target2))?;
+            y += h as i32;
+        }
     }
+
+    if *prefs_id == 1 {
+        checkbox(canvas, cgenex, 206, 50, "Always-on-Top", tahoma, marlett, texture_creator, aot.clone(), is_button_clicked, mx, my)?;
+    }
+
 
     let safalloff_str = format!("safalloff={}", winamp_config.safalloff.unwrap_or_default());
     if config_content.contains(&safalloff_str) {
@@ -1119,6 +1133,18 @@ fn draw_window(
     let vu_peak_fall_off_str = format!("vu_peak_fall_off={}", winamp_config.vu_peak_fall_off.unwrap_or_default());
     if config_content.contains(&vu_peak_fall_off_str) {
         config_content = config_content.replace(&vu_peak_fall_off_str, &format!("vu_peak_fall_off={}", *vupeakfo - 1));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
+
+    let prefs_tab_str = format!("prefs_tab={}", winamp_config.prefs_tab.unwrap_or_default());
+    if config_content.contains(&prefs_tab_str) {
+        config_content = config_content.replace(&prefs_tab_str, &format!("prefs_tab={}", *prefs_id));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
+
+    let aot_str = format!("aot={}", winamp_config.aot.unwrap_or_default());
+    if config_content.contains(&aot_str) {
+        config_content = config_content.replace(&aot_str, &format!("aot={}", *aot.lock().unwrap()));
         //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
     }
       
@@ -1313,7 +1339,7 @@ fn main() -> Result<(), String> {
     let vudraw = Arc::new(Mutex::new("normal".to_string()));
     let zoom = args.zoom;
     let amp = Arc::new(Mutex::new(1));
-    let mut mode = 1;
+    let mut mode: u8;
     let bandwidth = Arc::new(Mutex::new("thick".to_string()));
     let peakfo = Arc::new(Mutex::new(1));
     let barfo = Arc::new(Mutex::new(2));
@@ -1321,13 +1347,16 @@ fn main() -> Result<(), String> {
     let vu_peaks = Arc::new(Mutex::new(1));
     let vu_style_num = Arc::new(Mutex::new(0));
     let vu_peak_fall_off = Arc::new(Mutex::new(2));
+    let prefs_tab_id = Arc::new(Mutex::new(0));
+    let aot: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
 
     let mut peakfo_unlocked = peakfo.lock().unwrap();
     let mut barfo_unlocked = barfo.lock().unwrap();
     let mut amp_unlocked = amp.lock().unwrap();
 
     let mut vupeakfo_unlocked = vu_peak_fall_off.lock().unwrap();
-    //let mut peaks_unlocked = peaks.lock().unwrap();
+
+    let mut prefs_tab_unlocked = prefs_tab_id.lock().unwrap();
 
     if args.debug == true {
         println!("debug");
@@ -1376,7 +1405,13 @@ fn main() -> Result<(), String> {
     let vupeaks = winamp_config.vu_peaks.unwrap_or_default();
     let vu_peak_fall_off_c = winamp_config.vu_peak_fall_off.unwrap_or_default();
     let vu_style = winamp_config.vu_style.unwrap_or_default();
+    let prefs_tab = winamp_config.prefs_tab.unwrap_or_default();
+    let aotc = winamp_config.aot.unwrap_or_default();
     *vu_style_num.lock().unwrap() = vu_style;
+    *prefs_tab_unlocked = prefs_tab;
+    *aot.lock().unwrap() = aotc as u8;
+
+    let mut aot_bool = false;
 
     *barfo_unlocked = safalloff as u8 + 1;
     *peakfo_unlocked = sa_peak_falloff as u8 + 1;
@@ -1385,6 +1420,7 @@ fn main() -> Result<(), String> {
     *peaks.try_lock().unwrap() = sa_peaks as u8;
     *vupeakfo_unlocked = vu_peak_fall_off_c as u8 + 1;
     *vu_peaks.try_lock().unwrap() = vupeaks as u8;
+
     if (safire & (1 << 5)) != 0 {
         *bandwidth.lock().unwrap() = "thin".to_string();
     }
@@ -1412,8 +1448,6 @@ fn main() -> Result<(), String> {
     }
     println!("Loaded VU Meter style: {}", *vudraw.lock().unwrap());
     //config_sa_peaks = *peaks_unlocked != 0;
-
-    let mut aat: bool = false;
 
     let mut bars = [Bar {
         height: 0,
@@ -1579,9 +1613,14 @@ fn main() -> Result<(), String> {
                     }
                 }
                 Event::KeyDown { window_id: 2, keycode: Some(Keycode::A), .. } => {
-                    aat = !aat;
-                    canvas.window_mut().set_always_on_top(aat);
-                    println!("Always-On-Top: {aat}");
+                    aot_bool = !aot_bool;
+                    canvas.window_mut().set_always_on_top(aot_bool);
+                    if aot_bool {
+                        *aot.lock().unwrap() = 1;
+                    }
+                    else {
+                        *aot.lock().unwrap() = 0;
+                    }
                 }
 
                 Event::MouseButtonDown { window_id: 2, mouse_btn: MouseButton::Right, .. } => {
@@ -1630,6 +1669,8 @@ fn main() -> Result<(), String> {
 
         //println!("Captured audio samples: {:?}", audio_data);
 
+        canvas.window_mut().set_always_on_top(*aot.lock().unwrap() != 0);
+
         //println!("{}", sdl2::get_framerate());
         draw_visualizer(&mut canvas, &viscolors, &osc_colors, &vuc, peakrgb, &audio_data, &audio_data_l, &audio_data_r, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), &*vudraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *vupeakfo_unlocked, *barfo_unlocked, peaks.clone(), vu_peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
         draw_window(
@@ -1662,6 +1703,8 @@ fn main() -> Result<(), String> {
             config_file_path.clone(),
             safire,
             &device_in_use,
+            &mut prefs_tab_unlocked,
+            aot.clone(),
         )?;
         
         //draw_diag(&mut canvas2, &genex_colors, &*audio_data, &*spec_data)?;
