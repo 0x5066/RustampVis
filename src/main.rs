@@ -100,6 +100,7 @@ struct WinampConfig {
     vu_peak_fall_off: Option<i32>,
     prefs_tab: Option<i32>,
     aot: Option<i32>,
+    vu_rms: Option<i32>,
     non_visualizer_sections: String, // Store non-visualizer sections as a string
     // Add more fields as needed
 }
@@ -117,6 +118,7 @@ fn winamp_ini(content: &str) -> WinampConfig {
         vu_peak_fall_off: None,
         prefs_tab: None,
         aot: None,
+        vu_rms: None,
         non_visualizer_sections: String::new(),
     };
 
@@ -144,6 +146,7 @@ fn winamp_ini(content: &str) -> WinampConfig {
                     "vu_peak_fall_off" => winamp_config.vu_peak_fall_off = value.parse().ok(),
                     "prefs_tab" => winamp_config.prefs_tab = value.parse().ok(),
                     "aot" => winamp_config.aot = value.parse().ok(),
+                    "vu_rms" => winamp_config.vu_rms = value.parse().ok(),
                     _ => {}
                 }
             }
@@ -420,6 +423,7 @@ fn draw_visualizer(
     peakfo: u8,
     vu_peak_fall_off: u8,
     barfo: u8,
+    vu_rms: u8,
     peaks: Arc<Mutex<u8>>,
     vu_peaks: Arc<Mutex<u8>>,
     amp: u8,
@@ -445,7 +449,7 @@ fn draw_visualizer(
 
     // analyzer stuff
     process_fft_data(bars, &mut fft.iter(), bandwidth, peakfo, barfo, debug, debug_vector);
-    process_audio_data(bars, &mut ys1.iter(), &mut ys2.iter(), vu_peak_fall_off);
+    process_audio_data(bars, &mut ys1.iter(), &mut ys2.iter(), vu_peak_fall_off, vu_rms);
 
     for x in 0..75 {
         for y in 0..16 {
@@ -657,32 +661,33 @@ fn draw_visualizer(
     }
 }
 
-fn calculate_rms(samples: &[f32]) -> f32 {
-    // Calculate the average of the initial 100 samples
-    let take: i32 = 386;
-    let baseline: f32 = samples.iter().take(take as usize).cloned().sum::<f32>() / take as f32;
+fn calculate_rms(samples: &[f32], take: i32) -> f32 {
+    // Take the specified number of samples or use all if `take` is greater than the length
+    let samples_to_process = samples.iter().take(take.min(samples.len().try_into().unwrap()).try_into().unwrap());
 
-    // Subtract the baseline from all new readings, square the result, and calculate the average
-    let squared_diff_sum: f32 = samples
-        .iter()
-        .skip(1)
-        .map(|&reading| (reading - baseline).powi(2))
-        .sum();
+    // Calculate the sum of squared samples
+    let sum_of_squares: f32 = samples_to_process.clone().map(|&x| x * x).sum();
 
-    let mean_squared_diff = squared_diff_sum / (samples.len() - 100) as f32;
+    // Calculate the mean square value
+    let mean_square = sum_of_squares / samples_to_process.len() as f32;
 
-    // Take the square root to get the RMS value
-    let rms = mean_squared_diff.sqrt();
+    // Calculate the root mean square (RMS)
+    let rms = mean_square.sqrt();
 
     rms
 }
 
-fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mut std::slice::Iter<f32>, vu_peak_fall_off: u8) {
+fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mut std::slice::Iter<f32>, vu_peak_fall_off: u8, rms_v: u8) {
+
+    let ta_vec: Vec<i32> = vec![16384, 8192, 4096, 2048, 1024];
+    let ta_index = (rms_v as usize).saturating_sub(1).min(ta_vec.len() - 1);
+    let ta_value = ta_vec[ta_index] as i32;
+
     // Calculate RMS values for the first 75 samples for ys and ys2
-    let rms_ys = calculate_rms(&ys.map(|&x| x).collect::<Vec<_>>());
-    let rms_ys2 = calculate_rms(&ys2.map(|&x| x).collect::<Vec<_>>());
+    let rms_ys = calculate_rms(&ys.map(|&x| x).collect::<Vec<_>>(), ta_value);
+    let rms_ys2 = calculate_rms(&ys2.map(|&x| x).collect::<Vec<_>>(), ta_value);
 
-
+    println!("{ta_value}");
     // Update the second entry of vumeter field
     bars[0].vumeter = rms_ys as i32 - 1;
     if bars[0].vumeter >= 74 {
@@ -761,8 +766,8 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, tx_l: Sender<Vec<f32>>, tx_r: Sender<
     // ring buffer (VecDeque)
     let mut ring_buffer: VecDeque<f32> = VecDeque::with_capacity(593); //ironically the WASAPI buffer is apparently 2048 anyway...?
 
-    let mut ring_buffer_left: VecDeque<f32> = VecDeque::with_capacity(2048);
-    let mut ring_buffer_right: VecDeque<f32> = VecDeque::with_capacity(2048);
+    let mut ring_buffer_left: VecDeque<f32> = VecDeque::with_capacity(16384);
+    let mut ring_buffer_right: VecDeque<f32> = VecDeque::with_capacity(16384);
 
     let err_fn = move |err| {
         eprintln!("an error occurred on stream: {}", err);
@@ -975,6 +980,7 @@ fn draw_window(
     mut peakfo: &mut u8,
     mut vupeakfo: &mut u8,
     mut barfo: &mut u8,
+    mut vu_rms: &mut u8,
     mut amp: &mut u8,
     scroll: f64,
     ys: &mut [Bar],
@@ -1045,6 +1051,8 @@ fn draw_window(
         checkbox(canvas, cgenex, 206, 435, "Show Peaks", tahoma, marlett, texture_creator, vu_peaks.clone(), is_button_clicked, mx, my)?;
         render_text(canvas, tahoma, "Peak falloff speed:", cgenex[4], 210, 458, texture_creator)?;
         slider_small(canvas, cgenex, 133, 44, 210, 485, texture_creator, &mut vupeakfo, 5, image_path, is_button_clicked, mx, my)?;
+        render_text(canvas, tahoma, "RMS intensity:", cgenex[4], 380, 458, texture_creator)?;
+        slider_small(canvas, cgenex, 133, 44, 380, 485, texture_creator, &mut vu_rms, 5, image_path, is_button_clicked, mx, my)?;
         groupbox(canvas, "Device in use:", tahoma, texture_creator, cgenex, 195, 520, 384, 46)?;
         render_text(canvas, tahoma, device_in_use, cgenex[4], 209, 540, texture_creator)?;
         render_text(canvas, tahoma, &gbinfo1, cgenex[4], 206, 409, texture_creator)?;
@@ -1145,6 +1153,12 @@ fn draw_window(
     let aot_str = format!("aot={}", winamp_config.aot.unwrap_or_default());
     if config_content.contains(&aot_str) {
         config_content = config_content.replace(&aot_str, &format!("aot={}", *aot.lock().unwrap()));
+        //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
+    }
+
+    let vu_rms_str = format!("vu_rms={}", winamp_config.vu_rms.unwrap_or_default());
+    if config_content.contains(&vu_rms_str) {
+        config_content = config_content.replace(&vu_rms_str, &format!("vu_rms={}", *vu_rms - 1));
         //println!("sa_peaks: {:?}, peaks: {}", winamp_config.sa_peaks, new_value);
     }
       
@@ -1347,12 +1361,14 @@ fn main() -> Result<(), String> {
     let vu_peaks = Arc::new(Mutex::new(1));
     let vu_style_num = Arc::new(Mutex::new(0));
     let vu_peak_fall_off = Arc::new(Mutex::new(2));
+    let rms_v = Arc::new(Mutex::new(4));
     let prefs_tab_id = Arc::new(Mutex::new(0));
     let aot: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
 
     let mut peakfo_unlocked = peakfo.lock().unwrap();
     let mut barfo_unlocked = barfo.lock().unwrap();
     let mut amp_unlocked = amp.lock().unwrap();
+    let mut rms_v_unlocked = rms_v.lock().unwrap();
 
     let mut vupeakfo_unlocked = vu_peak_fall_off.lock().unwrap();
 
@@ -1380,6 +1396,12 @@ fn main() -> Result<(), String> {
         *vupeakfo_unlocked = 5;
     }
 
+    if *rms_v_unlocked <= 1 {
+        *rms_v_unlocked = 1;
+    } else if *rms_v_unlocked >= 5 {
+        *rms_v_unlocked = 5;
+    }
+
     // Extract the configuration file path from the command-line arguments
     let config_file_path = args.configini;
 
@@ -1405,6 +1427,7 @@ fn main() -> Result<(), String> {
     let vupeaks = winamp_config.vu_peaks.unwrap_or_default();
     let vu_peak_fall_off_c = winamp_config.vu_peak_fall_off.unwrap_or_default();
     let vu_style = winamp_config.vu_style.unwrap_or_default();
+    let vu_rms = winamp_config.vu_rms.unwrap_or_default();
     let prefs_tab = winamp_config.prefs_tab.unwrap_or_default();
     let aotc = winamp_config.aot.unwrap_or_default();
     *vu_style_num.lock().unwrap() = vu_style;
@@ -1420,6 +1443,7 @@ fn main() -> Result<(), String> {
     *peaks.try_lock().unwrap() = sa_peaks as u8;
     *vupeakfo_unlocked = vu_peak_fall_off_c as u8 + 1;
     *vu_peaks.try_lock().unwrap() = vupeaks as u8;
+    *rms_v_unlocked = vu_rms as u8 + 1;
 
     if (safire & (1 << 5)) != 0 {
         *bandwidth.lock().unwrap() = "thin".to_string();
@@ -1672,7 +1696,7 @@ fn main() -> Result<(), String> {
         canvas.window_mut().set_always_on_top(*aot.lock().unwrap() != 0);
 
         //println!("{}", sdl2::get_framerate());
-        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &vuc, peakrgb, &audio_data, &audio_data_l, &audio_data_r, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), &*vudraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *vupeakfo_unlocked, *barfo_unlocked, peaks.clone(), vu_peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
+        draw_visualizer(&mut canvas, &viscolors, &osc_colors, &vuc, peakrgb, &audio_data, &audio_data_l, &audio_data_r, &spec_data, &*oscstyle.lock().unwrap(), &*specdraw.lock().unwrap(), &*vudraw.lock().unwrap(), mode, &*bandwidth.lock().unwrap(), zoom, &mut bars, *peakfo_unlocked, *vupeakfo_unlocked, *barfo_unlocked, *rms_v_unlocked, peaks.clone(), vu_peaks.clone(), *amp_unlocked, args.debug, debug_vector.clone());
         draw_window(
             &mut canvas2,
             &genex_colors,
@@ -1695,6 +1719,7 @@ fn main() -> Result<(), String> {
             &mut *peakfo_unlocked,
             &mut *vupeakfo_unlocked,
             &mut *barfo_unlocked,
+            &mut rms_v_unlocked,
             &mut *amp_unlocked,
             scroll,
             &mut bars,
