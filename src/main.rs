@@ -67,7 +67,6 @@ struct Args {
     #[arg(short, long, default_value = "7")]
     zoom: i32,
 
-
     /* /// Modern Skin style visualization
     #[arg(short, long, default_value = "0")]
     modern: bool,*/
@@ -79,6 +78,10 @@ struct Args {
     /// Debug
     #[arg(long)]
     debug: bool,
+
+    /// Set your Skin
+    #[arg(short, long, default_value = "Default")]
+    skin: String,
 }
 
 #[derive(Debug)]
@@ -155,7 +158,6 @@ fn winamp_ini(content: &str) -> WinampConfig {
             winamp_config.non_visualizer_sections.push_str(&format!("{}\n", trimmed_line));
         }
     }
-
     winamp_config
 }
 
@@ -342,14 +344,13 @@ fn process_fft_data(bars: &mut [Bar], fft_iter: &mut std::slice::Iter<f64>, band
                 bars[i].peak = f64::max(0.0, bars[i].peak - f64::max(0.0, bars[i].gravity - threshold));
                 // Check if height2 is within the specified range (14.0 to 14.99)
                 if (bars[i].height2 >= 14.0) && (bars[i].height2 <= 14.99) || (bv_index == 4) && (bars[i].height2 >= 13.0) && (bars[i].height2 <= 14.99) {
-                    // Offset peak by -1
+                    // Offset peak by -3
                     bars[i].peak -= 0.25;
                 }
                 if bars[i].peak == 0.0 {
                     bars[i].peak = -3.0;
                 }
             }
-
         }
 
         }
@@ -662,19 +663,11 @@ fn draw_visualizer(
 }
 
 fn calculate_rms(samples: &[f32], take: i32) -> f32 {
-    // Take the specified number of samples or use all if `take` is greater than the length
-    let samples_to_process = samples.iter().take(take.min(samples.len().try_into().unwrap()).try_into().unwrap());
-
-    // Calculate the sum of squared samples
-    let sum_of_squares: f32 = samples_to_process.clone().map(|&x| x * x).sum();
-
-    // Calculate the mean square value
-    let mean_square = sum_of_squares / samples_to_process.len() as f32;
-
-    // Calculate the root mean square (RMS)
-    let rms = mean_square.sqrt();
-
-    rms
+    // based on
+    // https://icarus.cs.weber.edu/~dab/cs1410/textbook/7.Arrays/progexample/rms.html
+    
+    let sum: f32 = samples.iter().take(take as usize).map(|&xi| xi * xi).sum();
+    (sum / take as f32).sqrt()
 }
 
 fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mut std::slice::Iter<f32>, vu_peak_fall_off: u8, rms_v: u8) {
@@ -683,11 +676,15 @@ fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mu
     let ta_index = (rms_v as usize).saturating_sub(1).min(ta_vec.len() - 1);
     let ta_value = ta_vec[ta_index] as i32;
 
+    let pv_vec: Vec<f32> = vec![1.0, 1.125, 1.5, 2.0, 2.5];
+    let pv_index = (vu_peak_fall_off as usize).saturating_sub(1).min(pv_vec.len() - 1);
+    let pv_value = pv_vec[pv_index] as f32;
+
     // Calculate RMS values for the first 75 samples for ys and ys2
     let rms_ys = calculate_rms(&ys.map(|&x| x).collect::<Vec<_>>(), ta_value);
     let rms_ys2 = calculate_rms(&ys2.map(|&x| x).collect::<Vec<_>>(), ta_value);
 
-    println!("{ta_value}");
+    //println!("{ta_value}");
     // Update the second entry of vumeter field
     bars[0].vumeter = rms_ys as i32 - 1;
     if bars[0].vumeter >= 74 {
@@ -699,7 +696,7 @@ fn process_audio_data(bars: &mut [Bar], ys: &mut std::slice::Iter<f32>, ys2: &mu
     }
 
     for i in 0..NUM_BARS {
-        bars[i].vumeterpeak -= vu_peak_fall_off as f32 / 1.25;
+        bars[i].vumeterpeak -= pv_value;
 
         if bars[i].vumeterpeak <= bars[i].vumeter as f32 {
             bars[i].vumeterpeak = bars[i].vumeter as f32;
@@ -958,6 +955,19 @@ fn audio_stream_loop(tx: Sender<Vec<f32>>, tx_l: Sender<Vec<f32>>, tx_r: Sender<
     }
 }
 
+fn scale_variable(value: f32, num_frames: i32) -> i32 {
+    // Ensure num_frames is at least 1 to avoid division by zero
+    let num_frames = if num_frames == 0 { 1 } else { num_frames };
+
+    // Calculate the scaling factor
+    let scaling_factor = 74 / num_frames;
+
+    // Scale the variable
+    let scaled_value = value / scaling_factor as f32;
+
+    scaled_value as i32
+}
+
 fn draw_window(
     canvas: &mut sdl2::render::Canvas<sdl2::video::Window>,
     cgenex: &[Color],
@@ -968,6 +978,8 @@ fn draw_window(
     oscstyle: Arc<Mutex<String>>,
     mode: u8,
     image_path: &str,
+    /*llama_l: &sdl2::surface::Surface<'_>,
+    llama_r: &sdl2::surface::Surface<'_>,*/
     is_button_clicked: bool,
     mx: &mut i32,
     my: &mut i32,
@@ -1001,6 +1013,17 @@ fn draw_window(
     let br: f64 = (ys[2].vumeter + 1) as f64 * 2.27;
     //println!("{ys:?}");
 
+    /*let llam_l = texture_creator.create_texture_from_surface(&llama_l).map_err(|e| e.to_string())?;
+    let llam_r = texture_creator.create_texture_from_surface(&llama_r).map_err(|e| e.to_string())?;
+    let total_height = 750;
+    let frame_height = 50;
+    let num_frames = total_height / frame_height - 1;
+
+    let scaled_height_l: f32 = scale_variable(ys[0].vumeter as f32, num_frames) as f32;
+    //println!("{scaled_height_l}");
+    let scaled_height_r: f32 = scale_variable(ys[1].vumeter as f32, num_frames) as f32;*/
+    //println!("{scaled_height_r}");
+
     //println!("{}", br as u8);
 
     if mode == 0 {
@@ -1025,7 +1048,7 @@ fn draw_window(
 
     //vis box
 
-    let tabtext: String = "Classic Visualization;Additional Options".to_string();
+    let tabtext: String = "Classic Visualization;Additional Options;Test area".to_string();
     let classivis: String = "Classic skins have a simple visualization in the main window. You can\nselect what kind of visualization here or click on the visualization to cycle\nthrough the modes.".to_string();
     let groupboxtext1: String = "Classic Visualization Settings".to_string();
     let groupboxtext2: String = "Spectrum Analyzer Options".to_string();
@@ -1101,6 +1124,14 @@ fn draw_window(
         checkbox(canvas, cgenex, 206, 50, "Always-on-Top", tahoma, marlett, texture_creator, aot.clone(), is_button_clicked, mx, my)?;
     }
 
+    if *prefs_id == 2 {
+        /*let src_rect1 = sdl2::rect::Rect::new(0, scaled_height_l as i32 * frame_height, 76, 50);
+        let dst_rect1 = sdl2::rect::Rect::new(200, 50, 76, 50); // Adjust this to position the frame
+        let src_rect2 = sdl2::rect::Rect::new(0, scaled_height_r as i32 * frame_height, 76, 50);
+        let dst_rect2 = sdl2::rect::Rect::new(277, 50, 76, 50); // Adjust this to position the frame
+        canvas.copy(&llam_l, src_rect1, dst_rect1)?;
+        canvas.copy(&llam_r, src_rect2, dst_rect2)?;*/
+    }
 
     let safalloff_str = format!("safalloff={}", winamp_config.safalloff.unwrap_or_default());
     if config_content.contains(&safalloff_str) {
@@ -1347,7 +1378,6 @@ fn main() -> Result<(), String> {
     let mut debug_vector: Vec<f64> = vec![0.0; 75];
     debug_vector[0] = 15.0;
     
-    // handle args
     let oscstyle = Arc::new(Mutex::new("lines".to_string())); // Convert String to &str
     let specdraw = Arc::new(Mutex::new("normal".to_string()));
     let vudraw = Arc::new(Mutex::new("normal".to_string()));
@@ -1486,6 +1516,63 @@ fn main() -> Result<(), String> {
     let mut mouse_x: i32 = 0;
     let mut mouse_y: i32 = 0;
 
+    let skins_folder = "Skins";
+    let default_folder = args.skin.as_str();
+    let mut genex_path = "gen_ex.png";
+    let mut genex_colors: Vec<Color> = vec![Color::RGB(0, 0, 0)];
+    let mut theonlycursor: &str = "NORMAL.PNG";
+    /*let mut ll: &str = "beat_l2.png";
+    let mut lr: &str = "beat_r2.png";*/
+    let default_folder_path: std::path::PathBuf;
+    let mut skin_dir: &str = "";
+    let normal_full_path: std::path::PathBuf;
+    let genex_full_path: std::path::PathBuf;
+    /*let llama1_full_path: std::path::PathBuf;
+    let llama2_full_path: std::path::PathBuf;*/
+
+        // Check if "Skins" folder exists
+        if let Ok(mut skins_entries) = fs::read_dir(skins_folder) {
+            // Check if "Default" folder exists within "Skins"
+            if let Some(default_entry) = skins_entries.find(|entry| {
+                if let Ok(entry) = entry {
+                    entry.file_name() == default_folder
+                } else {
+                    false
+                }
+            }) {
+                // Combine paths to check for the specific image in "Default" folder
+                default_folder_path = default_entry.unwrap().path();
+                genex_full_path = default_folder_path.join(genex_path);
+                normal_full_path = default_folder_path.join(theonlycursor);
+                /*llama1_full_path = default_folder_path.join(ll);
+                llama2_full_path = default_folder_path.join(lr);*/
+                skin_dir = default_folder_path.to_str().unwrap();
+    
+                // Check if the image file exists
+                if genex_full_path.exists() && normal_full_path.exists() {
+                    // Do something with the image
+                    println!("Found {genex_path} at: {:?}", genex_full_path);
+                    println!("Found {theonlycursor} at: {:?}", normal_full_path);
+                    /*println!("Found {ll} at: {:?}", llama1_full_path);
+                    println!("Found {lr} at: {:?}", llama2_full_path);*/
+                    theonlycursor = normal_full_path.to_str().unwrap();
+                    /*ll = llama1_full_path.to_str().unwrap();
+                    lr = llama2_full_path.to_str().unwrap();*/
+    
+                    // Call the genex function with the image path
+                    genex_colors = genex(genex_full_path.to_str().unwrap());
+                    genex_path = genex_full_path.to_str().unwrap();
+                    // Further processing with genex_colors...
+                } else {
+                    println!("Image(s) not found in {default_folder}.");
+                }
+            } else {
+                println!("'Default' folder not found within 'Skins'.");
+            }
+        } else {
+            println!("'Skins' folder not found.");
+        }
+
     // set up sdl2
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
@@ -1544,13 +1631,18 @@ fn main() -> Result<(), String> {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     let surface =
-    sdl2::surface::Surface::from_file(&"NORMAL.PNG").map_err(|err| format!("failed to load cursor image: {}", err))?;
+    sdl2::surface::Surface::from_file(theonlycursor).map_err(|err| format!("failed to load cursor image: {}", err))?;
+
+    /*let llama_l =
+    sdl2::surface::Surface::from_file(ll).map_err(|err| format!("failed to load cursor image: {}", err))?;
+    let llama_r =
+    sdl2::surface::Surface::from_file(lr).map_err(|err| format!("failed to load cursor image: {}", err))?;*/
     let cursor = Cursor::from_surface(surface, 0, 0)
         .map_err(|err| format!("failed to load cursor: {}", err))?;
     cursor.set();
 
     // Load the custom viscolor.txt file
-    let mut viscolors = viscolors::load_colors(&args.viscolor);
+    let mut viscolors = viscolors::load_colors(&(skin_dir.to_owned()+"/"+&args.viscolor));
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
@@ -1602,8 +1694,8 @@ fn main() -> Result<(), String> {
         }
     });
 
-    let image_path = "gen_ex.png";
-    let genex_colors = genex(image_path);
+    //let image_path = "gen_ex.png";
+    //let genex_colors = genex(image_path);
     let mut is_button_clicked = false;
 
     let mut scroll: f64 = 0.0;
@@ -1706,7 +1798,9 @@ fn main() -> Result<(), String> {
             &vectorgfx,
             oscstyle.clone(),
             mode,
-            image_path,
+            genex_path,
+            /*&llama_l,
+            &llama_r,*/
             is_button_clicked,
             &mut mouse_x,
             &mut mouse_y,

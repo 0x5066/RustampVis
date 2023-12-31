@@ -11,6 +11,7 @@ pub fn load_colors(file_path: &str) -> Vec<Color> {
 
     match extension {
         Some("txt") => {
+            println!("Loaded {file_path}");
             let file = File::open(file_path).expect("Failed to open file");
             for line in BufReader::new(file).lines() {
                 if let Ok(line) = line {
