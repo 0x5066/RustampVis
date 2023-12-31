@@ -1601,17 +1601,20 @@ fn main() -> Result<(), String> {
     let font_path_bold: &str;
     let vectorgfx_path: &str;
     let vectorgfx_size: u16;
+    let backslash_gcc_fix: &str;
     
     if cfg!(windows) {
         font_path = "C:\\Windows\\fonts\\tahoma.ttf";
         font_path_bold = "C:\\Windows\\fonts\\tahomabd.ttf";
         vectorgfx_path = "C:\\Windows\\fonts\\marlett.ttf";
         vectorgfx_size = 15;
+        backslash_gcc_fix = "\\";
     } else if cfg!(unix) {
         font_path = "font/tahoma.ttf";
         font_path_bold = "font/tahomabd.ttf";
         vectorgfx_path = "font/marlett.ttf";
         vectorgfx_size = 15;
+        backslash_gcc_fix = "/";
     } else {
         // Handle the case where neither windows nor unix is the configuration
         return Err("Unsupported platform".to_string());
@@ -1634,15 +1637,15 @@ fn main() -> Result<(), String> {
     sdl2::surface::Surface::from_file(theonlycursor).map_err(|err| format!("failed to load cursor image: {}", err))?;
 
     /*let llama_l =
-    sdl2::surface::Surface::from_file(ll).map_err(|err| format!("failed to load cursor image: {}", err))?;
+    sdl2::surface::Surface::from_file(ll).map_err(|err| format!("failed to load image: {}", err))?;
     let llama_r =
-    sdl2::surface::Surface::from_file(lr).map_err(|err| format!("failed to load cursor image: {}", err))?;*/
+    sdl2::surface::Surface::from_file(lr).map_err(|err| format!("failed to load image: {}", err))?;*/
     let cursor = Cursor::from_surface(surface, 0, 0)
         .map_err(|err| format!("failed to load cursor: {}", err))?;
     cursor.set();
 
     // Load the custom viscolor.txt file
-    let mut viscolors = viscolors::load_colors(&(skin_dir.to_owned()+"/"+&args.viscolor));
+    let mut viscolors = viscolors::load_colors(&(skin_dir.to_owned()+backslash_gcc_fix+&args.viscolor));
     // extract relevant osc colors from the array
     let mut osc_colors = osccolors(&viscolors);
     let mut peakrgb = peakc(&viscolors);
@@ -1694,8 +1697,6 @@ fn main() -> Result<(), String> {
         }
     });
 
-    //let image_path = "gen_ex.png";
-    //let genex_colors = genex(image_path);
     let mut is_button_clicked = false;
 
     let mut scroll: f64 = 0.0;
@@ -1833,7 +1834,7 @@ fn main() -> Result<(), String> {
         canvas2.present();
         scroll += SCROLL_SPEED;
 
-        std::thread::sleep(std::time::Duration::from_millis(13));
+        ::std::thread::sleep(std::time::Duration::new(0, 1_000_000_000u32 / 75));
     }
 
     // Stop the audio streaming loop gracefully
